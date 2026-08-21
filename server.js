@@ -23,7 +23,7 @@ const cors = require('cors');
 const PORT = process.env.PORT || 3001;
 const ROOT = __dirname;
 const DB_PATH = path.join(ROOT, 'db.json');
-const SEED_PATH = path.join(ROOT, 'db.seed.json');
+const SEED_PATH = path.join(ROOT, 'db_seed.json');
 
 /* ---------- Date helpers (alignés sur data.js) ---------- */
 const dt = {
@@ -1243,10 +1243,11 @@ api.get('/', (req, res) => {
 
 app.use('/api/v1', api);
 
-/* Fichiers statiques (HTML de l'app) */
-app.use(express.static(ROOT));
+/* Fichiers statiques (HTML de l'app) — déplacés dans vercel/ pour le déploiement */
+const WEB_ROOT = path.join(ROOT, 'vercel');
+app.use(express.static(WEB_ROOT));
 app.get('/', (req, res) => {
-  res.sendFile(path.join(ROOT, 'batipilot-standalone.html'));
+  res.sendFile(path.join(WEB_ROOT, 'batipilot-standalone.html'));
 });
 
 app.listen(PORT, () => {

@@ -1080,11 +1080,37 @@ table.tbl--rows tbody tr:hover{ background:var(--navy-050); }
   .card{ break-inside:avoid; box-shadow:none; }
 }
 
+/* ---- Connexion ---- */
+.auth-screen{ min-height:100vh; display:flex; align-items:center; justify-content:center; background:var(--bg); padding:24px; }
+.auth-card{ width:100%; max-width:360px; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); box-shadow:var(--shadow-2); padding:32px 28px; }
+.auth-card__mark{ width:44px; height:44px; display:flex; align-items:center; justify-content:center; background:var(--navy); color:#fff; border-radius:var(--r); }
+.auth-card h1{ font-family:'Barlow Semi Condensed',sans-serif; font-size:24px; margin:14px 0 2px; color:var(--text); }
+.auth-card form{ margin-top:20px; display:flex; flex-direction:column; gap:14px; }
+.auth-error{ color:var(--danger); font-size:13px; margin:0; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 </head>
 <body>
 
-<div class="app" id="app">
+<div class="auth-screen" id="authScreen">
+  <div class="auth-card">
+    <div class="auth-card__mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 20h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6 20V9l6-4 6 4v11" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/><path d="M10 20v-5h4v5" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+    </div>
+    <h1>BâtiPilot</h1>
+    <p class="muted">Connexion à votre espace</p>
+    <form id="authForm">
+      <div class="field field--full"><label for="auth-email">E-mail</label>
+        <input id="auth-email" type="email" autocomplete="username" required></div>
+      <div class="field field--full"><label for="auth-password">Mot de passe</label>
+        <input id="auth-password" type="password" autocomplete="current-password" required></div>
+      <p class="auth-error" id="authError" hidden></p>
+      <button class="btn btn--primary btn--block" type="submit">Se connecter</button>
+    </form>
+  </div>
+</div>
+
+<div class="app" id="app" hidden>
 
   <!-- ============ MENU LATÉRAL ============ -->
   <aside class="sidebar" id="sidebar">
@@ -2812,7 +2838,17 @@ window.ERP = window.ERP || {};
         return Promise.resolve(true);
       }
     },
-    search: (q) => request('/search', { params: { q } })
+    search: (q) => request('/search', { params: { q } }),
+
+    /* Gestion des utilisateurs — admin uniquement, pas de mode mock */
+    admin: {
+      users: {
+        list: () => request('/admin/users'),
+        invite: (payload) => request('/admin/users/invite', { method: 'POST', body: payload }),
+        update: (id, patch) => request('/admin/users/' + id, { method: 'PATCH', body: patch }),
+        setProjects: (id, projectIds) => request('/admin/users/' + id + '/projects', { method: 'POST', body: { projectIds } })
+      }
+    }
   };
 })(window.ERP);
 
@@ -2962,6 +2998,14 @@ window.ERP = window.ERP || {};
       actif: ['Actif', 'badge badge--ok'],
       prospect: ['Prospect', 'badge badge--info'],
       inactif: ['Inactif', 'badge']
+    },
+    userRole: {
+      admin: ['Admin', 'badge badge--info'],
+      ingenieur: ['Ingénieur', 'badge']
+    },
+    userActive: {
+      actif: ['Actif', 'badge badge--ok'],
+      inactif: ['Désactivé', 'badge badge--danger']
     },
     priority: {
       haute: ['Haute', 'badge badge--danger'],
@@ -6928,6 +6972,168 @@ window.ERP = window.ERP || {};
 
 </script>
 <script>
+/* ===== js/users.js =====
+   BâtiPilot — Module UTILISATEURS (admin uniquement)
+   Invite des ingénieurs, leur assigne des chantiers, gère rôle/activation.
+   Les policies RLS empêchent un non-admin d'atteindre ces données même en
+   forçant l'URL — ce module est une commodité UI, pas la barrière de sécurité. */
+window.ERP = window.ERP || {};
+
+(function (ERP) {
+  'use strict';
+  const { icon, on, esc, toast, confirm, badge } = ERP.UI;
+
+  async function renderList(params, view) {
+    if (!ERP.DB.user || ERP.DB.user.role !== 'admin') {
+      view.innerHTML = ERP.UI.empty('Accès réservé', 'Cette page est réservée aux administrateurs.');
+      return;
+    }
+
+    view.innerHTML = `
+      <div class="toolbar">
+        <span class="spacer"></span>
+        <button class="btn btn--accent" id="usInvite">${icon('plus', 20)} Inviter un ingénieur</button>
+      </div>
+      <section class="card">
+        <div class="card__head"><h3>Comptes</h3><span class="spacer"></span><span class="tag" id="usCount"></span></div>
+        <div class="card__body card__body--flush"><div class="table-wrap">
+          <table class="tbl"><thead><tr>
+            <th>Nom</th><th>E-mail</th><th>Rôle</th><th>Statut</th><th>Chantiers assignés</th><th class="t-right">Actions</th>
+          </tr></thead><tbody id="usRows"></tbody></table>
+        </div></div>
+      </section>`;
+
+    let projects = [];
+    async function refresh() {
+      const [users, allProjects] = await Promise.all([
+        ERP.Api.admin.users.list(),
+        projects.length ? Promise.resolve(projects) : ERP.Api.projects.list()
+      ]);
+      projects = allProjects;
+      const nameById = Object.fromEntries(projects.map(p => [p.id, p.name]));
+
+      view.querySelector('#usCount').textContent = users.length + ' compte' + (users.length > 1 ? 's' : '');
+      const tb = view.querySelector('#usRows');
+      if (!users.length) {
+        tb.innerHTML = `<tr><td colspan="6">${ERP.UI.empty('Aucun utilisateur', 'Invitez un ingénieur pour commencer.')}</td></tr>`;
+        return;
+      }
+      tb.innerHTML = users.map(u => `
+        <tr data-id="${u.id}">
+          <td><div class="idcell">
+              <span class="avatar avatar--soft">${esc((u.fullName || u.email || '?').slice(0, 2).toUpperCase())}</span>
+              <span class="idcell__txt"><div class="cell-main">${esc(u.fullName || '—')}</div></span>
+            </div></td>
+          <td class="small">${esc(u.email)}</td>
+          <td>${badge('userRole', u.role)}</td>
+          <td>${badge('userActive', u.active ? 'actif' : 'inactif')}</td>
+          <td class="small">${(u.projectIds || []).map(id => esc(nameById[id] || id)).join(', ') || '—'}</td>
+          <td class="t-right">
+            ${u.role === 'admin' ? '' : `<button class="btn btn--sm" data-assign>${icon('building', 16)} Chantiers</button>`}
+            <button class="btn btn--sm" data-toggle>${u.active ? 'Désactiver' : 'Activer'}</button>
+          </td>
+        </tr>`).join('');
+    }
+
+    await refresh();
+
+    view.querySelector('#usInvite').onclick = () => openInvite(refresh, projects);
+
+    on(view, 'click', '[data-assign]', async (e, t) => {
+      const row = t.closest('tr');
+      const users = await ERP.Api.admin.users.list();
+      const u = users.find(x => x.id === row.dataset.id);
+      openAssign(u, projects, refresh);
+    });
+
+    on(view, 'click', '[data-toggle]', async (e, t) => {
+      const row = t.closest('tr');
+      const users = await ERP.Api.admin.users.list();
+      const u = users.find(x => x.id === row.dataset.id);
+      const ok = await confirm({
+        title: u.active ? 'Désactiver ce compte ?' : 'Activer ce compte ?',
+        confirmLabel: u.active ? 'Désactiver' : 'Activer',
+        danger: u.active,
+        text: u.active
+          ? 'L\'utilisateur ne pourra plus se connecter tant que le compte n\'est pas réactivé.'
+          : 'L\'utilisateur pourra de nouveau se connecter.'
+      });
+      if (!ok) return;
+      await ERP.Api.admin.users.update(u.id, { active: !u.active });
+      toast(u.active ? 'Compte désactivé' : 'Compte activé', 'ok');
+      refresh();
+    });
+  }
+
+  /* ---------- Inviter un ingénieur ---------- */
+  function openInvite(done, projects) {
+    const m = ERP.UI.modal({
+      title: 'Inviter un ingénieur',
+      sub: 'Un e-mail avec un lien de création de mot de passe lui sera envoyé',
+      body: `<div class="form-grid">
+          <div class="field field--full"><label for="us-name">Nom complet</label><input id="us-name" placeholder="Ex. : Amine Rebaya"></div>
+          <div class="field field--full"><label for="us-email">E-mail</label><input id="us-email" type="email" placeholder="prenom.nom@entreprise.tn"></div>
+          <div class="field field--full"><label for="us-projects">Chantiers assignés</label>
+            <select id="us-projects" multiple size="6">
+              ${projects.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}
+            </select>
+          </div>
+        </div>`,
+      footer: `<button class="btn" data-cancel>Annuler</button>
+               <button class="btn btn--primary" data-save>${icon('save', 18)} Envoyer l'invitation</button>`
+    });
+    m.foot.querySelector('[data-cancel]').onclick = m.close;
+    m.foot.querySelector('[data-save]').onclick = async () => {
+      const email = m.body.querySelector('#us-email').value.trim();
+      const fullName = m.body.querySelector('#us-name').value.trim();
+      const projectIds = Array.from(m.body.querySelector('#us-projects').selectedOptions).map(o => o.value);
+      if (!email) { toast('L\'e-mail est obligatoire', 'danger'); return; }
+      try {
+        await ERP.Api.admin.users.invite({ email, fullName, projectIds });
+        toast('Invitation envoyée à ' + email, 'ok');
+        m.close();
+        if (done) done();
+      } catch (err) {
+        toast('Erreur : ' + (err.message || err), 'danger');
+      }
+    };
+  }
+
+  /* ---------- Assigner des chantiers ---------- */
+  function openAssign(u, projects, done) {
+    const current = new Set(u.projectIds || []);
+    const m = ERP.UI.modal({
+      title: 'Chantiers assignés',
+      sub: esc(u.fullName || u.email),
+      body: `<div class="form-grid">
+          <div class="field field--full"><label for="us-a-projects">Chantiers</label>
+            <select id="us-a-projects" multiple size="8">
+              ${projects.map(p => `<option value="${p.id}" ${current.has(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+            </select>
+          </div>
+        </div>`,
+      footer: `<button class="btn" data-cancel>Annuler</button>
+               <button class="btn btn--primary" data-save>${icon('save', 18)} Enregistrer</button>`
+    });
+    m.foot.querySelector('[data-cancel]').onclick = m.close;
+    m.foot.querySelector('[data-save]').onclick = async () => {
+      const projectIds = Array.from(m.body.querySelector('#us-a-projects').selectedOptions).map(o => o.value);
+      try {
+        await ERP.Api.admin.users.setProjects(u.id, projectIds);
+        toast('Affectations mises à jour', 'ok');
+        m.close();
+        if (done) done();
+      } catch (err) {
+        toast('Erreur : ' + (err.message || err), 'danger');
+      }
+    };
+  }
+
+  ERP.Router.add('/utilisateurs', { title: 'Utilisateurs', sub: 'Ingénieurs et accès', render: renderList });
+})(window.ERP);
+
+</script>
+<script>
 /* ===== js/settings.js ===== */
 /* =========================================================
    BâtiPilot — Module PARAMÈTRES & PROFIL
@@ -7099,6 +7305,50 @@ window.ERP = window.ERP || {};
 
 </script>
 <script>
+/* ===== js/auth.js =====
+   Authentification Supabase. La clé « anon » ci-dessous est publique par
+   conception (protégée côté serveur par les policies RLS) — voir
+   supabase/schema.sql. Le rôle (admin/ingénieur) est déterminé par la
+   ligne `profiles` de l'utilisateur, jamais par le client. */
+window.ERP = window.ERP || {};
+
+(function (ERP) {
+  'use strict';
+
+  var SUPABASE_URL = 'https://aqfximfpjaiiitlqwmti.supabase.co';
+  var SUPABASE_ANON_KEY = 'sb_publishable_K8fKVgp7Ss_a9VpZo8612Q_BPRrhO_t';
+  var client = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  async function signIn(email, password) {
+    var res = await client.auth.signInWithPassword({ email: email, password: password });
+    if (res.error) throw res.error;
+    return res.data.session;
+  }
+
+  async function signOut() {
+    await client.auth.signOut();
+  }
+
+  async function getSession() {
+    var res = await client.auth.getSession();
+    return res.data.session || null;
+  }
+
+  async function fetchProfile(userId) {
+    var res = await client.from('profiles').select('*').eq('id', userId).single();
+    if (res.error) throw res.error;
+    return res.data;
+  }
+
+  function onAuthStateChange(cb) {
+    client.auth.onAuthStateChange(cb);
+  }
+
+  ERP.Auth = { client: client, signIn: signIn, signOut: signOut, getSession: getSession, fetchProfile: fetchProfile, onAuthStateChange: onAuthStateChange };
+})(window.ERP);
+
+</script>
+<script>
 /* ===== js/app.js ===== */
 /* =========================================================
    BâtiPilot — Amorçage de l'application
@@ -7129,12 +7379,13 @@ window.ERP = window.ERP || {};
     {
       group: 'Gestion', items: [
         { href: '/clients', icon: 'users', label: 'Clients' },
-        { href: '/budgets', icon: 'wallet', label: 'Budgets & coûts' },
+        { href: '/budgets', icon: 'wallet', label: 'Budgets & coûts', roles: ['admin'] },
         { href: '/rapports', icon: 'chart', label: 'Rapports' }
       ]
     },
     {
       group: 'Système', items: [
+        { href: '/utilisateurs', icon: 'user', label: 'Utilisateurs', roles: ['admin'] },
         { href: '/parametres', icon: 'settings', label: 'Paramètres' }
       ]
     }
@@ -7144,16 +7395,21 @@ window.ERP = window.ERP || {};
   const nav = document.getElementById('mainNav');
 
   function buildNav() {
-    nav.innerHTML = NAV.map(sec => `
+    const role = (ERP.DB.user && ERP.DB.user.role) || 'ingenieur';
+    nav.innerHTML = NAV.map(sec => {
+      const items = sec.items.filter(it => !it.roles || it.roles.includes(role));
+      if (!items.length) return '';
+      return `
       <div class="nav__group">${sec.group}</div>
-      ${sec.items.map(it => {
+      ${items.map(it => {
         const n = it.pill ? it.pill() : 0;
         return `<button class="nav__item" data-href="${it.href}" type="button" title="${it.label}">
           ${icon(it.icon, 21)}
           <span class="nav__label">${it.label}</span>
           ${n ? `<span class="nav__pill ${it.muted ? 'nav__pill--muted' : ''} num">${n}</span>` : ''}
         </button>`;
-      }).join('')}`).join('');
+      }).join('')}`;
+    }).join('');
   }
 
   function markActive(path) {
@@ -7229,9 +7485,9 @@ window.ERP = window.ERP || {};
       closePopover();
       const ok = await confirm({
         title: 'Se déconnecter ?', confirmLabel: 'Déconnexion', icon: 'logout',
-        text: 'Les pointages non synchronisés seront conservés sur la tablette jusqu\'à votre prochaine connexion.'
+        text: 'Vous devrez vous reconnecter pour accéder à BâtiPilot.'
       });
-      if (ok) toast('Déconnexion simulée — session conservée pour la démonstration', 'info');
+      if (ok) await ERP.Auth.signOut();
     };
   }
 
@@ -7297,13 +7553,65 @@ window.ERP = window.ERP || {};
     });
   }
 
-  /* ---------- Démarrage ---------- */
-  function boot() {
-    // Toujours démarrer en mode localStorage (pas le serveur JSON)
+  /* ---------- Connexion ---------- */
+  function showLogin(message) {
+    document.getElementById('app').hidden = true;
+    document.getElementById('authScreen').hidden = false;
+    const err = document.getElementById('authError');
+    if (message) { err.textContent = message; err.hidden = false; } else { err.hidden = true; }
+  }
+
+  function wireAuthForm() {
+    document.getElementById('authForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const email = document.getElementById('auth-email').value.trim();
+      const password = document.getElementById('auth-password').value;
+      const btn = e.target.querySelector('button[type=submit]');
+      btn.disabled = true;
+      try {
+        const session = await ERP.Auth.signIn(email, password);
+        await enterApp(session);
+      } catch (err) {
+        showLogin(err.message === 'Invalid login credentials'
+          ? 'E-mail ou mot de passe incorrect.'
+          : 'Connexion impossible : ' + err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
+
+  /* ---------- Entrée dans l'application (après connexion) ---------- */
+  async function enterApp(session) {
+    ERP.Api.config.mode = 'http';
+    ERP.Api.config.baseUrl = '/api/v1';
+    ERP.Api.config.token = session.access_token;
+
+    let profile = null;
+    try { profile = await ERP.Auth.fetchProfile(session.user.id); } catch (_) {}
+
+    ERP.DB.user = {
+      id: session.user.id,
+      name: (profile && profile.full_name) || session.user.email,
+      initials: (profile && profile.initials) || (session.user.email || '?').slice(0, 2).toUpperCase(),
+      role: (profile && profile.role) || 'ingenieur',
+      email: session.user.email,
+      phone: (profile && profile.phone) || '',
+      agency: (profile && profile.agency) || '',
+      since: (profile && profile.since) || ''
+    };
+
+    // Recharge les compteurs de menu / notifications depuis les vraies données
+    // (scopées par la RLS selon le rôle), à la place du jeu de démo statique.
     try {
-      if (ERP.Api && typeof ERP.Api.useLocalStorage === 'function') ERP.Api.useLocalStorage();
-      else if (ERP.Api && ERP.Api.config) ERP.Api.config.mode = 'mock';
-    } catch (_) {}
+      ERP.DB.projects = await ERP.Api.projects.list();
+      ERP.DB.tasks = await ERP.Api.tasks.list();
+      ERP.DB.articles = await ERP.Api.articles.list();
+      ERP.DB.notifications = await ERP.Api.notifications.list();
+    } catch (_) { /* les badges resteront à 0 si l'API est indisponible */ }
+
+    document.getElementById('authScreen').hidden = true;
+    document.getElementById('app').hidden = false;
 
     buildNav();
     setupSidebar();
@@ -7331,7 +7639,22 @@ window.ERP = window.ERP || {};
     });
 
     console.info('%cBâtiPilot', 'font:600 16px Barlow Semi Condensed;color:#E4651A',
-      '— prototype ERP chantier · données simulées (ERP.Api.config.mode = "mock")');
+      '— connecté en tant que ' + ERP.DB.user.name + ' (' + ERP.DB.user.role + ')');
+  }
+
+  /* ---------- Démarrage ---------- */
+  function boot() {
+    wireAuthForm();
+
+    ERP.Auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') location.reload();
+      else if (event === 'TOKEN_REFRESHED' && session) ERP.Api.config.token = session.access_token;
+    });
+
+    ERP.Auth.getSession().then((session) => {
+      if (session) enterApp(session);
+      else showLogin();
+    });
   }
 
   ERP.App = { refreshHeader, buildNav };
