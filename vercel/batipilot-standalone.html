@@ -1091,6 +1091,7 @@ table.tbl--rows tbody tr:hover{ background:var(--navy-050); }
 .auth-card h1{ font-family:'Barlow Semi Condensed',sans-serif; font-size:24px; margin:14px 0 2px; color:var(--text); }
 .auth-card form{ margin-top:20px; display:flex; flex-direction:column; gap:14px; }
 .auth-error{ color:var(--danger); font-size:13px; margin:0; }
+.auth-ok{ color:var(--ok); font-size:13px; margin:0; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 </head>
@@ -1102,15 +1103,27 @@ table.tbl--rows tbody tr:hover{ background:var(--navy-050); }
       <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 20h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6 20V9l6-4 6 4v11" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/><path d="M10 20v-5h4v5" stroke="currentColor" stroke-width="2" fill="none"/></svg>
     </div>
     <h1>BâtiPilot</h1>
-    <p class="muted">Connexion à votre espace</p>
+    <p class="muted" id="authIntro">Connexion à votre espace</p>
     <form id="authForm">
       <div class="field field--full"><label for="auth-email">E-mail</label>
         <input id="auth-email" type="email" autocomplete="username" required></div>
       <div class="field field--full"><label for="auth-password">Mot de passe</label>
-        <input id="auth-password" type="password" autocomplete="current-password" required></div>
+        <input id="auth-password" type="password" autocomplete="current-password" minlength="6" required></div>
       <p class="auth-error" id="authError" hidden></p>
+      <p class="auth-ok" id="authOk" hidden></p>
       <button class="btn btn--primary btn--block" type="submit">Se connecter</button>
     </form>
+    <form id="signupForm" hidden>
+      <div class="field field--full"><label for="signup-name">Nom complet</label>
+        <input id="signup-name" autocomplete="name" required></div>
+      <div class="field field--full"><label for="signup-email">E-mail (@batipilot.tn)</label>
+        <input id="signup-email" type="email" placeholder="prenom.nom@batipilot.tn" autocomplete="username" required></div>
+      <div class="field field--full"><label for="signup-password">Mot de passe</label>
+        <input id="signup-password" type="password" autocomplete="new-password" minlength="6" required></div>
+      <p class="auth-error" id="signupError" hidden></p>
+      <button class="btn btn--primary btn--block" type="submit">Créer mon compte</button>
+    </form>
+    <button class="btn btn--ghost btn--block" id="authToggle" type="button" style="margin-top:10px">Créer un compte ingénieur</button>
   </div>
 </div>
 
@@ -7348,7 +7361,21 @@ window.ERP = window.ERP || {};
     client.auth.onAuthStateChange(cb);
   }
 
-  ERP.Auth = { client: client, signIn: signIn, signOut: signOut, getSession: getSession, fetchProfile: fetchProfile, onAuthStateChange: onAuthStateChange };
+  /* Inscription — passe par notre API (pas client.auth.signUp direct) car
+     la validation du domaine @batipilot.tn doit être faite côté serveur :
+     un formulaire côté client ne suffit pas à empêcher un autre domaine. */
+  async function signUp(email, password, fullName) {
+    var res = await fetch('/api/v1/auth/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, password: password, fullName: fullName })
+    });
+    var body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.message || body.error || 'Inscription impossible');
+    return body;
+  }
+
+  ERP.Auth = { client: client, signIn: signIn, signUp: signUp, signOut: signOut, getSession: getSession, fetchProfile: fetchProfile, onAuthStateChange: onAuthStateChange };
 })(window.ERP);
 
 </script>
@@ -7491,7 +7518,7 @@ window.ERP = window.ERP || {};
         title: 'Se déconnecter ?', confirmLabel: 'Déconnexion', icon: 'logout',
         text: 'Vous devrez vous reconnecter pour accéder à BâtiPilot.'
       });
-      if (ok) await ERP.Auth.signOut();
+      if (ok) { await ERP.Auth.signOut(); location.reload(); }
     };
   }
 
@@ -7558,11 +7585,17 @@ window.ERP = window.ERP || {};
   }
 
   /* ---------- Connexion ---------- */
-  function showLogin(message) {
+  function showLogin(message, okMessage) {
     document.getElementById('app').hidden = true;
     document.getElementById('authScreen').hidden = false;
+    document.getElementById('authForm').hidden = false;
+    document.getElementById('signupForm').hidden = true;
+    document.getElementById('authIntro').textContent = 'Connexion à votre espace';
+    document.getElementById('authToggle').textContent = 'Créer un compte ingénieur';
     const err = document.getElementById('authError');
     if (message) { err.textContent = message; err.hidden = false; } else { err.hidden = true; }
+    const ok = document.getElementById('authOk');
+    if (okMessage) { ok.textContent = okMessage; ok.hidden = false; } else { ok.hidden = true; }
   }
 
   function wireAuthForm() {
@@ -7583,6 +7616,37 @@ window.ERP = window.ERP || {};
         btn.disabled = false;
       }
     });
+
+    document.getElementById('authToggle').addEventListener('click', () => {
+      const showingSignup = !document.getElementById('signupForm').hidden;
+      document.getElementById('authForm').hidden = !showingSignup;
+      document.getElementById('signupForm').hidden = showingSignup;
+      document.getElementById('authIntro').textContent = showingSignup ? 'Connexion à votre espace' : 'Créer un compte ingénieur';
+      document.getElementById('authToggle').textContent = showingSignup ? 'Créer un compte ingénieur' : 'J\'ai déjà un compte';
+      document.getElementById('authError').hidden = true;
+      document.getElementById('authOk').hidden = true;
+    });
+
+    document.getElementById('signupForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fullName = document.getElementById('signup-name').value.trim();
+      const email = document.getElementById('signup-email').value.trim();
+      const password = document.getElementById('signup-password').value;
+      const btn = e.target.querySelector('button[type=submit]');
+      const err = document.getElementById('signupError');
+      btn.disabled = true;
+      err.hidden = true;
+      try {
+        const res = await ERP.Auth.signUp(email, password, fullName);
+        e.target.reset();
+        showLogin(null, res.message || 'Compte créé. Un administrateur doit approuver votre accès.');
+      } catch (ex) {
+        err.textContent = ex.message;
+        err.hidden = false;
+      } finally {
+        btn.disabled = false;
+      }
+    });
   }
 
   /* ---------- Entrée dans l'application (après connexion) ---------- */
@@ -7593,6 +7657,12 @@ window.ERP = window.ERP || {};
 
     let profile = null;
     try { profile = await ERP.Auth.fetchProfile(session.user.id); } catch (_) {}
+
+    if (!profile || !profile.active) {
+      await ERP.Auth.signOut();
+      showLogin('Votre compte n\'est pas encore approuvé par un administrateur.');
+      return;
+    }
 
     const displayName = (profile && profile.full_name) || session.user.email;
     ERP.DB.user = {
@@ -7652,9 +7722,11 @@ window.ERP = window.ERP || {};
   function boot() {
     wireAuthForm();
 
+    // Chaque déconnexion gère elle-même sa transition d'écran (voir
+    // openUserMenu et le contrôle de compte non approuvé dans enterApp) —
+    // pas de rechargement automatique ici, qui écraserait un message affiché.
     ERP.Auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') location.reload();
-      else if (event === 'TOKEN_REFRESHED' && session) ERP.Api.config.token = session.access_token;
+      if (event === 'TOKEN_REFRESHED' && session) ERP.Api.config.token = session.access_token;
     });
 
     ERP.Auth.getSession().then((session) => {

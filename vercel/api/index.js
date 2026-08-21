@@ -262,6 +262,33 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
+const ALLOWED_SIGNUP_DOMAIN = 'batipilot.tn';
+const isAllowedDomain = (email) => new RegExp(`@${ALLOWED_SIGNUP_DOMAIN}$`, 'i').test(String(email || ''));
+
+/* ---- Inscription publique — pas de requireAuth : n'importe qui peut
+   appeler cette route, donc la validation de domaine se fait ici,
+   côté serveur, et non dans le formulaire (qui peut être contourné). Le
+   compte est créé désactivé ; un admin doit l'approuver depuis /utilisateurs. */
+app.post('/api/v1/auth/signup', async (req, res) => {
+  try {
+    const { email, password, fullName } = req.body || {};
+    if (!email || !isAllowedDomain(email)) {
+      return res.status(400).json({ error: 'domain_not_allowed', message: `Utilisez une adresse e-mail @${ALLOWED_SIGNUP_DOMAIN}.` });
+    }
+    if (!password || password.length < 6) {
+      return res.status(400).json({ error: 'weak_password', message: 'Le mot de passe doit contenir au moins 6 caractères.' });
+    }
+    const { data, error } = await adminClient.auth.admin.createUser({
+      email, password, email_confirm: true, user_metadata: { full_name: fullName || '' }
+    });
+    if (error) return res.status(400).json({ error: error.message });
+    await adminClient.from('profiles').update({ active: false }).eq('id', data.user.id);
+    res.status(201).json({ ok: true, message: 'Compte créé. Un administrateur doit approuver votre accès avant votre première connexion.' });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'server_error' });
+  }
+});
+
 const api = express.Router();
 api.use(requireAuth);
 
@@ -1116,6 +1143,7 @@ admin.post('/users/invite', async (req, res, next) => {
   try {
     const { email, fullName, projectIds } = req.body || {};
     if (!email) return fail(res, 400, 'email_required');
+    if (!isAllowedDomain(email)) return fail(res, 400, `Utilisez une adresse e-mail @${ALLOWED_SIGNUP_DOMAIN}.`);
     const { data, error } = await adminClient.auth.admin.inviteUserByEmail(email, {
       data: { full_name: fullName || '' }
     });

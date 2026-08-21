@@ -68,6 +68,9 @@ create table if not exists project_members (
   primary key (project_id, user_id)
 );
 
+-- Membership additionally requires the caller's own profile to be active,
+-- so a not-yet-approved signup or a deactivated engineer is blocked even
+-- if already (or still) listed in project_members.
 create or replace function is_project_member(p_project_id text)
 returns boolean
 language sql
@@ -75,8 +78,9 @@ security definer set search_path = public
 stable
 as $$
   select exists (
-    select 1 from project_members
-    where project_id = p_project_id and user_id = auth.uid()
+    select 1 from project_members pm
+    join profiles p on p.id = pm.user_id
+    where pm.project_id = p_project_id and pm.user_id = auth.uid() and p.active
   );
 $$;
 
