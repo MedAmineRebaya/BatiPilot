@@ -1081,6 +1081,10 @@ table.tbl--rows tbody tr:hover{ background:var(--navy-050); }
 }
 
 /* ---- Connexion ---- */
+/* [hidden] doit l'emporter sur .app/.auth-screen qui définissent toutes
+   deux `display` — sans ceci, l'attribut hidden est silencieusement
+   ignoré par le navigateur (les styles auteur passent avant l'UA). */
+#app[hidden], #authScreen[hidden]{ display:none !important; }
 .auth-screen{ min-height:100vh; display:flex; align-items:center; justify-content:center; background:var(--bg); padding:24px; }
 .auth-card{ width:100%; max-width:360px; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); box-shadow:var(--shadow-2); padding:32px 28px; }
 .auth-card__mark{ width:44px; height:44px; display:flex; align-items:center; justify-content:center; background:var(--navy); color:#fff; border-radius:var(--r); }
@@ -7590,9 +7594,11 @@ window.ERP = window.ERP || {};
     let profile = null;
     try { profile = await ERP.Auth.fetchProfile(session.user.id); } catch (_) {}
 
+    const displayName = (profile && profile.full_name) || session.user.email;
     ERP.DB.user = {
       id: session.user.id,
-      name: (profile && profile.full_name) || session.user.email,
+      name: displayName,
+      firstName: displayName.split(' ')[0],
       initials: (profile && profile.initials) || (session.user.email || '?').slice(0, 2).toUpperCase(),
       role: (profile && profile.role) || 'ingenieur',
       email: session.user.email,
