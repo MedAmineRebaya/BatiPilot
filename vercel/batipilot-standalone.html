@@ -1090,6 +1090,9 @@ table.tbl--rows tbody tr:hover{ background:var(--navy-050); }
 .auth-card__mark{ width:44px; height:44px; display:flex; align-items:center; justify-content:center; background:var(--navy); color:#fff; border-radius:var(--r); }
 .auth-card h1{ font-family:'Barlow Semi Condensed',sans-serif; font-size:24px; margin:14px 0 2px; color:var(--text); }
 .auth-card form{ margin-top:20px; display:flex; flex-direction:column; gap:14px; }
+.auth-card form[hidden] {
+  display: none !important;
+}
 .auth-error{ color:var(--danger); font-size:13px; margin:0; }
 .auth-ok{ color:var(--ok); font-size:13px; margin:0; }
 </style>
