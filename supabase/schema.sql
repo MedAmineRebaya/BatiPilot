@@ -303,6 +303,31 @@ drop policy if exists profiles_self_update on profiles;
 create policy profiles_self_update on profiles for update
   using (id = auth.uid()) with check (id = auth.uid());
 
+-- RLS policies operate on rows, not columns — profiles_self_update above
+-- would otherwise let a user change their OWN role/active via a direct
+-- REST call (bypassing the app's admin-only endpoints entirely). Block
+-- that at the trigger level. auth.uid() is null for service-role calls
+-- (our admin API), which is how admins actually change these columns —
+-- so only block when a real user JWT is present and isn't an admin.
+create or replace function prevent_self_privilege_escalation()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if auth.uid() is not null and not is_admin()
+     and (new.role is distinct from old.role or new.active is distinct from old.active) then
+    raise exception 'Seul un administrateur peut modifier le rôle ou le statut actif';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists profiles_prevent_escalation on profiles;
+create trigger profiles_prevent_escalation
+  before update on profiles
+  for each row execute function prevent_self_privilege_escalation();
+
 -- project_members: admin manages; a user can read their own memberships
 drop policy if exists members_admin_all on project_members;
 create policy members_admin_all on project_members for all

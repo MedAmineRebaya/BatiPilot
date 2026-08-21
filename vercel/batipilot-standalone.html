@@ -2860,6 +2860,12 @@ window.ERP = window.ERP || {};
     },
     search: (q) => request('/search', { params: { q } }),
 
+    /* Profil du compte connecté (n'importe quel rôle) */
+    me: {
+      get: () => request('/me'),
+      update: (patch) => request('/me', { method: 'PATCH', body: patch })
+    },
+
     /* Gestion des utilisateurs — admin uniquement, pas de mode mock */
     admin: {
       users: {
@@ -7180,13 +7186,14 @@ window.ERP = window.ERP || {};
               <div class="row" style="gap:16px;margin-bottom:18px">
                 <span class="avatar avatar--lg">${u.initials}</span>
                 <div><h2 style="font-size:20px">${esc(u.name)}</h2>
-                  <div class="muted small">${esc(u.role)} · ${esc(u.agency)}</div></div>
+                  <div class="muted small">${u.role === 'admin' ? 'Administrateur' : 'Ingénieur'}${u.agency ? ' · ' + esc(u.agency) : ''}</div></div>
               </div>
               <div class="form-grid">
                 <div class="field"><label for="p-name">Nom complet</label><input id="p-name" value="${esc(u.name)}"></div>
-                <div class="field"><label for="p-role">Fonction</label><input id="p-role" value="${esc(u.role)}"></div>
-                <div class="field"><label for="p-email">E-mail</label><input id="p-email" type="email" value="${esc(u.email)}"></div>
                 <div class="field"><label for="p-phone">Téléphone</label><input id="p-phone" value="${esc(u.phone)}"></div>
+                <div class="field field--full"><label for="p-email">E-mail</label>
+                  <input id="p-email" type="email" value="${esc(u.email)}" disabled>
+                  <span class="field__hint">Géré par le compte de connexion — contactez un administrateur pour le modifier.</span></div>
               </div>
             </div>
             <div class="card__foot" style="display:flex;justify-content:flex-end">
@@ -7223,56 +7230,38 @@ window.ERP = window.ERP || {};
 
         <div class="stack">
           <section class="card">
-            <div class="card__head"><h3>Connexion aux données</h3><span class="spacer"></span>
-              <span class="badge ${ERP.Api.config.mode === 'mock' ? 'badge--warn' : 'badge--ok'}" id="apiBadge">
-                ${ERP.Api.config.mode === 'mock' ? 'localStorage (navigateur)' : 'API connectée'}</span></div>
+            <div class="card__head"><h3>Connexion</h3><span class="spacer"></span>
+              <span class="badge badge--ok">Connecté</span></div>
             <div class="card__body">
-              <p class="small muted" style="margin-bottom:16px">
-                Par défaut, toutes les modifications sont enregistrées dans le <b>localStorage</b> du navigateur
-                (persistantes après rechargement). Vous pouvez optionnellement connecter un serveur JSON
-                (<code>http://localhost:3001/api/v1</code>) — sinon restez en mode démonstration.
-              </p>
-              <div class="form-grid">
-                <div class="field field--full"><label for="s-url">Adresse de l'API</label>
-                  <input id="s-url" value="${ERP.Api.config.baseUrl}" placeholder="http://localhost:3001/api/v1"></div>
-                <div class="field field--full"><label for="s-token">Jeton d'authentification</label>
-                  <input id="s-token" type="password" placeholder="Bearer token" value=""></div>
-              </div>
-              <div class="row" style="gap:10px;margin-top:16px">
-                <button class="btn btn--primary" id="apiConnect">${icon('refresh', 18)} Connecter l'API</button>
-                <button class="btn" id="apiMock">Revenir aux données de démo</button>
-              </div>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="card__head"><h3>Jeu de démonstration</h3></div>
-            <div class="card__body">
-              <dl class="props">
-                <div class="prop"><dt>Projets</dt><dd class="num">${ERP.DB.projects.length}</dd></div>
-                <div class="prop"><dt>Clients</dt><dd class="num">${ERP.DB.clients.length}</dd></div>
-                <div class="prop"><dt>Ouvriers</dt><dd class="num">${ERP.DB.workers.length}</dd></div>
-                <div class="prop"><dt>Articles</dt><dd class="num">${ERP.DB.articles.length}</dd></div>
-                <div class="prop"><dt>Tâches</dt><dd class="num">${ERP.DB.tasks.length}</dd></div>
-                <div class="prop"><dt>Date simulée</dt><dd class="num">${fmt.date(ERP.DB.today)}</dd></div>
+              <dl class="props" style="grid-template-columns:1fr">
+                <div class="prop"><dt>Rôle</dt><dd>${u.role === 'admin' ? 'Administrateur' : 'Ingénieur'}</dd></div>
+                <div class="prop"><dt>Compte</dt><dd style="font-size:14px">${esc(u.email)}</dd></div>
               </dl>
-              <button class="btn btn--block" style="margin-top:16px" id="sReset">${icon('refresh', 18)} Réinitialiser les données</button>
+              <p class="small muted" style="margin-top:10px">
+                Les données sont lues et enregistrées en direct sur le serveur — aucune sauvegarde locale
+                dans le navigateur.
+              </p>
             </div>
           </section>
         </div>
       </div>`;
 
-    view.querySelector('#pSave').onclick = () => {
-      const u2 = ERP.DB.user;
-      u2.name = view.querySelector('#p-name').value.trim() || u2.name;
-      u2.role = view.querySelector('#p-role').value.trim();
-      u2.email = view.querySelector('#p-email').value.trim();
-      u2.phone = view.querySelector('#p-phone').value.trim();
-      u2.initials = u2.name.split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
-      u2.firstName = u2.name.split(' ')[0];
-      if (ERP.DB.save) ERP.DB.save();
-      ERP.App.refreshHeader();
-      toast('Profil enregistré', 'ok');
+    view.querySelector('#pSave').onclick = async () => {
+      const name = view.querySelector('#p-name').value.trim();
+      const phone = view.querySelector('#p-phone').value.trim();
+      if (!name) { toast('Le nom est obligatoire', 'danger'); return; }
+      try {
+        const updated = await ERP.Api.me.update({ fullName: name, phone });
+        const u2 = ERP.DB.user;
+        u2.name = updated.fullName || name;
+        u2.firstName = u2.name.split(' ')[0];
+        u2.phone = updated.phone || phone;
+        u2.initials = u2.name.split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase();
+        ERP.App.refreshHeader();
+        toast('Profil enregistré', 'ok');
+      } catch (err) {
+        toast('Erreur : ' + (err.message || err), 'danger');
+      }
     };
     on(view, 'change', '[data-pref]', (e, t) => {
       prefs[t.dataset.pref] = t.checked;

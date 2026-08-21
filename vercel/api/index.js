@@ -292,6 +292,27 @@ app.post('/api/v1/auth/signup', async (req, res) => {
 const api = express.Router();
 api.use(requireAuth);
 
+/* ---- Mon profil (n'importe quel utilisateur connecté, pas admin requis) ---- */
+api.get('/me', async (req, res, next) => {
+  try {
+    const { data, error } = await req.supa.from('profiles').select('*').eq('id', req.userId).maybeSingle();
+    if (error) throw error;
+    ok(res, data);
+  } catch (e) { next(e); }
+});
+
+api.patch('/me', async (req, res, next) => {
+  try {
+    const patch = snakeize(req.body || {});
+    // role/active are ignored here even before the DB reaches the trigger
+    // that blocks them for non-admin callers — defense in depth.
+    delete patch.id; delete patch.role; delete patch.active; delete patch.email; delete patch.created_at;
+    const { data, error } = await req.supa.from('profiles').update(patch).eq('id', req.userId).select().maybeSingle();
+    if (error) throw error;
+    ok(res, data);
+  } catch (e) { next(e); }
+});
+
 /* ---- Meta ---- */
 api.get('/meta', async (req, res) => {
   const supa = req.supa;
