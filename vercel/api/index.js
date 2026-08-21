@@ -1216,7 +1216,11 @@ app.use('/api/v1', api);
 /* ---- Gestion d'erreurs ---- */
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(500).json({ error: err.message || 'server_error' });
+  // Postgres 42501 / PostgREST's RLS-violation message means the request
+  // was correctly blocked by a policy — that's a permissions problem
+  // (403), not a server fault (500).
+  const isRlsBlock = err.code === '42501' || /row-level security policy/i.test(err.message || '');
+  res.status(isRlsBlock ? 403 : 500).json({ error: isRlsBlock ? 'forbidden' : (err.message || 'server_error') });
 });
 
 module.exports = app;
