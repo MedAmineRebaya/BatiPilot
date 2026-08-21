@@ -3404,7 +3404,9 @@ window.ERP = window.ERP || {};
 
   function path() {
     const h = location.hash.replace(/^#/, '').split('?')[0];
-    return h && h !== '/' ? h : '/dashboard';
+    if (h && h !== '/') return h;
+    // L'admin n'a pas de chantier propre — Utilisateurs est son accueil.
+    return (ERP.DB.user && ERP.DB.user.role === 'admin') ? '/utilisateurs' : '/dashboard';
   }
 
   /** #/projets?statut=termine → { statut:'termine' } */
@@ -7410,27 +7412,31 @@ window.ERP = window.ERP || {};
   const { icon, fmt, on, esc, toast, confirm, popover, closePopover } = ERP.UI;
 
   /* ---------- Structure du menu ---------- */
+  // L'admin supervise et approuve les comptes — il n'a aucune relation à un
+  // chantier en particulier, donc aucun des modules opérationnels ci-dessous
+  // ne lui est présenté. Utilisateurs (+ ses propres Paramètres) est tout
+  // ce qu'affiche son menu.
   const NAV = [
     {
       group: 'Pilotage', items: [
-        { href: '/dashboard', icon: 'home', label: 'Tableau de bord' },
-        { href: '/projets', icon: 'building', label: 'Projets', pill: () => ERP.DB.projects.filter(p => p.status === 'en_retard').length },
-        { href: '/planning', icon: 'calendar', label: 'Planning' },
-        { href: '/taches', icon: 'checkSquare', label: 'Tâches', pill: () => ERP.DB.tasks.filter(t => t.status !== 'termine' && t.due < ERP.DB.today).length }
+        { href: '/dashboard', icon: 'home', label: 'Tableau de bord', roles: ['ingenieur'] },
+        { href: '/projets', icon: 'building', label: 'Projets', roles: ['ingenieur'], pill: () => ERP.DB.projects.filter(p => p.status === 'en_retard').length },
+        { href: '/planning', icon: 'calendar', label: 'Planning', roles: ['ingenieur'] },
+        { href: '/taches', icon: 'checkSquare', label: 'Tâches', roles: ['ingenieur'], pill: () => ERP.DB.tasks.filter(t => t.status !== 'termine' && t.due < ERP.DB.today).length }
       ]
     },
     {
       group: 'Terrain', items: [
-        { href: '/pointage', icon: 'hardhat', label: 'Pointage' },
-        { href: '/articles', icon: 'package', label: 'Articles', pill: () => ERP.DB.articles.filter(a => a.stockStatus !== 'ok').length, muted: true },
-        { href: '/fournisseurs', icon: 'truck', label: 'Fournisseurs' }
+        { href: '/pointage', icon: 'hardhat', label: 'Pointage', roles: ['ingenieur'] },
+        { href: '/articles', icon: 'package', label: 'Articles', roles: ['ingenieur'], pill: () => ERP.DB.articles.filter(a => a.stockStatus !== 'ok').length, muted: true },
+        { href: '/fournisseurs', icon: 'truck', label: 'Fournisseurs', roles: ['ingenieur'] }
       ]
     },
     {
       group: 'Gestion', items: [
-        { href: '/clients', icon: 'users', label: 'Clients' },
-        { href: '/budgets', icon: 'wallet', label: 'Budgets & coûts', roles: ['admin'] },
-        { href: '/rapports', icon: 'chart', label: 'Rapports' }
+        { href: '/clients', icon: 'users', label: 'Clients', roles: ['ingenieur'] },
+        { href: '/budgets', icon: 'wallet', label: 'Budgets & coûts', roles: ['ingenieur'] },
+        { href: '/rapports', icon: 'chart', label: 'Rapports', roles: ['ingenieur'] }
       ]
     },
     {
