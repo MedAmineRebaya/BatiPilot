@@ -208,8 +208,8 @@ button{ cursor:pointer; }
 .app.is-collapsed .nav__group,
 .app.is-collapsed .sync__text,
 .app.is-collapsed .nav__pill{ display:none; }
-.app.is-collapsed .sidebar__brand{ padding:0 12px; justify-content:center; }
-.app.is-collapsed .sidebar__toggle{ display:none; }
+.app.is-collapsed .sidebar__brand{ padding:0 12px; flex-direction:column; gap:10px; }
+.app.is-collapsed .sidebar__toggle{ margin-left:0; }
 .app.is-collapsed .nav__item{ justify-content:center; padding:0; }
 .app.is-collapsed .sync{ justify-content:center; }
 
@@ -3488,12 +3488,14 @@ window.ERP = window.ERP || {};
   async function render(params, view) {
     view.innerHTML = ERP.UI.skeleton(2);
 
-    const [k, projects, tasks, notifs, activity] = await Promise.all([
+    const isAdmin = ERP.DB.user.role === 'admin';
+    const [k, projects, tasks, notifs, activity, pending] = await Promise.all([
       ERP.Api.dashboard.kpis(),
       ERP.Api.projects.list(),
       ERP.Api.tasks.list(),
       ERP.Api.notifications.list(),
-      ERP.Api.dashboard.activity()
+      ERP.Api.dashboard.activity(),
+      isAdmin ? ERP.Api.admin.users.list().then(us => us.filter(u => !u.active)) : Promise.resolve([])
     ]);
 
     const active = projects.filter(p => p.status !== 'termine')
@@ -3524,6 +3526,20 @@ window.ERP = window.ERP || {};
         ${kpiCard({ label: 'Tâches en retard', value: k.lateTasks, ico: 'alert', tone: 'kpi__ico--danger', href: '#/taches', alert: k.lateTasks > 0, foot: 'Échéance dépassée' })}
         ${kpiCard({ label: 'Budget consommé', value: k.burn, unit: '%', ico: 'wallet', tone: 'kpi__ico--warn', href: '#/budgets', foot: `${fmt.moneyShort(k.remaining)} disponibles` })}
       </div>
+
+      ${isAdmin && pending.length ? `
+      <div class="alert-band alert-band--danger" id="dashPending" style="margin-bottom:var(--gap)">
+        <div class="row" style="gap:12px;flex:1;flex-wrap:wrap;align-items:center">
+          <div style="flex:1;min-width:220px">
+            <strong>${pending.length} compte${pending.length > 1 ? 's' : ''} ingénieur en attente d'approbation</strong>
+            <p>${pending.map(u => esc(u.fullName || u.email)).join(' · ')}</p>
+          </div>
+          <div class="row" style="gap:8px;flex-wrap:wrap">
+            ${pending.slice(0, 3).map(u => `<button class="btn btn--sm btn--primary" data-approve="${u.id}">${icon('check', 16)} Approuver ${esc((u.fullName || u.email).split(' ')[0])}</button>`).join('')}
+            <a class="btn btn--sm" href="#/utilisateurs">Voir tout</a>
+          </div>
+        </div>
+      </div>` : ''}
 
       ${lateProjects.length ? `
       <div class="alert-band" style="margin-bottom:var(--gap)">
@@ -3617,6 +3633,17 @@ window.ERP = window.ERP || {};
 
     on(view, 'click', '[data-go]', (e, t) => ERP.Router.go(t.dataset.go.replace(/^#/, '')));
     on(view, 'click', '.project-card', (e, t) => ERP.Router.go('/projets/' + t.dataset.id));
+    on(view, 'click', '[data-approve]', async (e, t) => {
+      t.disabled = true;
+      try {
+        await ERP.Api.admin.users.update(t.dataset.approve, { active: true });
+        ERP.UI.toast('Compte approuvé', 'ok');
+        render(params, view);
+      } catch (err) {
+        ERP.UI.toast('Erreur : ' + (err.message || err), 'danger');
+        t.disabled = false;
+      }
+    });
   }
 
   ERP.Router.add('/dashboard', { title: 'Tableau de bord', sub: 'Vue globale de l\'activité', render });
@@ -7559,13 +7586,18 @@ window.ERP = window.ERP || {};
     const scrim = document.getElementById('sidebarScrim');
     const closeDrawer = () => { app.classList.remove('is-drawer-open'); scrim.hidden = true; };
 
-    document.getElementById('btnCollapse').innerHTML = icon('chevronsLeft', 20);
+    const collapseBtn = document.getElementById('btnCollapse');
+    collapseBtn.innerHTML = icon('chevronsLeft', 20);
     document.getElementById('btnBurger').innerHTML = icon('menu', 24);
     document.getElementById('searchIcon').innerHTML = icon('search', 19);
     const notifBtn = document.getElementById('btnNotif');
     if (!notifBtn.querySelector('svg')) notifBtn.insertAdjacentHTML('afterbegin', icon('bell', 22));
 
-    document.getElementById('btnCollapse').onclick = () => app.classList.toggle('is-collapsed');
+    collapseBtn.onclick = () => {
+      const collapsed = app.classList.toggle('is-collapsed');
+      collapseBtn.innerHTML = icon(collapsed ? 'chevronRight' : 'chevronsLeft', 20);
+      collapseBtn.setAttribute('aria-label', collapsed ? 'Agrandir le menu' : 'Réduire le menu');
+    };
     document.getElementById('btnBurger').onclick = () => {
       app.classList.add('is-drawer-open'); scrim.hidden = false;
     };
