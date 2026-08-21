@@ -1,0 +1,16 @@
+{
+  "name": "batipilot-server",
+  "version": "1.0.0",
+  "description": "BâtiPilot — serveur JSON local pour démos et tests",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "seed": "node seed.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  }
+}
