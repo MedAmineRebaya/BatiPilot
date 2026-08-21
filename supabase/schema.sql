@@ -114,7 +114,8 @@ create table if not exists projects (
   budget numeric not null default 0,
   spent numeric not null default 0,
   type text not null default '',
-  phases jsonb not null default '[]'::jsonb
+  phases jsonb not null default '[]'::jsonb,
+  created_by uuid references profiles(id)
 );
 
 create table if not exists workers (
@@ -270,6 +271,25 @@ create table if not exists activity (
   meta text not null default '',
   time text not null default ''
 );
+
+-- Migration for databases created before this column existed
+-- (CREATE TABLE IF NOT EXISTS above is a no-op on an existing table).
+alter table projects add column if not exists created_by uuid references profiles(id);
+
+-- Any active user (admin or engineer) may create a project; the API sets
+-- created_by and auto-assigns the creator as a project_member.
+create or replace function is_active()
+returns boolean
+language sql
+security definer set search_path = public
+stable
+as $$
+  select exists (select 1 from profiles where id = auth.uid() and active);
+$$;
+
+drop policy if exists projects_insert_active on projects;
+create policy projects_insert_active on projects for insert
+  with check (is_active());
 
 -- ---------------------------------------------------------
 -- 4. Row Level Security

@@ -2985,7 +2985,7 @@ window.ERP = window.ERP || {};
     /** minutes depuis minuit → '07:02' */
     time: (min) => min == null ? '—' : `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(Math.round(min % 60)).padStart(2, '0')}`,
     /** 8.05 → '8h03' */
-    hours: (h) => { if (h == null) return '—'; const t = Math.round(h * 60); return `${Math.floor(t / 60)}h${String(t % 60).padStart(2, '0')}`; },
+    hours: (h) => { if (h == null || !isFinite(h)) return '—'; const t = Math.round(h * 60); return `${Math.floor(t / 60)}h${String(t % 60).padStart(2, '0')}`; },
     months: MONTHS, monthsShort: MONTHS_SHORT, daysShort: DAYS_SHORT
   };
 
@@ -7562,7 +7562,8 @@ window.ERP = window.ERP || {};
     document.getElementById('btnCollapse').innerHTML = icon('chevronsLeft', 20);
     document.getElementById('btnBurger').innerHTML = icon('menu', 24);
     document.getElementById('searchIcon').innerHTML = icon('search', 19);
-    document.getElementById('btnNotif').insertAdjacentHTML('afterbegin', icon('bell', 22));
+    const notifBtn = document.getElementById('btnNotif');
+    if (!notifBtn.querySelector('svg')) notifBtn.insertAdjacentHTML('afterbegin', icon('bell', 22));
 
     document.getElementById('btnCollapse').onclick = () => app.classList.toggle('is-collapsed');
     document.getElementById('btnBurger').onclick = () => {
@@ -7669,14 +7670,24 @@ window.ERP = window.ERP || {};
       since: (profile && profile.since) || ''
     };
 
-    // Recharge les compteurs de menu / notifications depuis les vraies données
-    // (scopées par la RLS selon le rôle), à la place du jeu de démo statique.
+    // Remplace le jeu de démo statique (data.js) par les vraies données,
+    // scopées par la RLS selon le rôle. Plusieurs modules (Pointage,
+    // Articles, Fournisseurs, création de projet…) lisent encore ERP.DB.X
+    // en synchrone pour leurs listes déroulantes au lieu de repasser par
+    // ERP.Api à chaque rendu — recharger ici au moins au login évite qu'ils
+    // affichent en permanence les 20 clients / 50 ouvriers de démonstration
+    // au lieu des vraies données Supabase. (Une création faite en cours de
+    // session n'apparaîtra dans ces listes qu'après la prochaine connexion —
+    // limite connue, pas un blocage pour l'usage courant.)
     try {
       ERP.DB.projects = await ERP.Api.projects.list();
       ERP.DB.tasks = await ERP.Api.tasks.list();
       ERP.DB.articles = await ERP.Api.articles.list();
       ERP.DB.notifications = await ERP.Api.notifications.list();
-    } catch (_) { /* les badges resteront à 0 si l'API est indisponible */ }
+      ERP.DB.clients = await ERP.Api.clients.list();
+      ERP.DB.workers = await ERP.Api.workers.list();
+      ERP.DB.suppliers = await ERP.Api.suppliers.list();
+    } catch (_) { /* les badges/listes resteront sur les données de démo si l'API est indisponible */ }
 
     document.getElementById('authScreen').hidden = true;
     document.getElementById('app').hidden = false;

@@ -394,7 +394,7 @@ api.post('/projects', async (req, res, next) => {
     const id = await nextId('projects', 'PRJ-');
     const row = {
       id, ref: 'CHT-' + today().slice(0, 4) + '-' + id.slice(4),
-      spent: 0, progress: 0, status: 'en_preparation',
+      spent: 0, progress: 0, status: 'en_preparation', created_by: req.userId,
       ...snakeize(body)
     };
     const phaseTaskIds = await Promise.all(picked.map(() => nextId('tasks', 'TSK-')));
@@ -402,6 +402,10 @@ api.post('/projects', async (req, res, next) => {
       taskId: phaseTaskIds[i], name: t.name, start: t.start, end: t.end, progress: 0, lead: t.assignee || row.manager
     }));
     throwIfError(await req.supa.from('projects').insert(row));
+    // The creator must be a project_member before any further req.supa reads/writes
+    // on this project (RLS scopes everything else through project_members) — use
+    // the service-role client here since the row doesn't grant self-access yet.
+    throwIfError(await adminClient.from('project_members').upsert({ project_id: id, user_id: req.userId }));
     if (picked.length) {
       const taskRows = picked.map((t, i) => ({
         id: phaseTaskIds[i], title: t.name, project_id: id,
