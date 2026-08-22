@@ -1085,6 +1085,7 @@ table.tbl--rows tbody tr:hover{ background:var(--navy-050); }
    deux `display` — sans ceci, l'attribut hidden est silencieusement
    ignoré par le navigateur (les styles auteur passent avant l'UA). */
 #app[hidden], #authScreen[hidden]{ display:none !important; }
+body.role-assistant .write-guard{ display:none !important; }
 .auth-screen{ min-height:100vh; display:flex; align-items:center; justify-content:center; background:var(--bg); padding:24px; }
 .auth-card{ width:100%; max-width:360px; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); box-shadow:var(--shadow-2); padding:32px 28px; }
 .auth-card__mark{ width:44px; height:44px; display:flex; align-items:center; justify-content:center; background:var(--navy); color:#fff; border-radius:var(--r); }
@@ -1202,726 +1203,46 @@ table.tbl--rows tbody tr:hover{ background:var(--navy-050); }
 <script>
 /* ===== js/data.js ===== */
 /* =========================================================
-   BâtiPilot — Données de démonstration
+   BâtiPilot — État applicatif partagé (ERP.DB)
    ---------------------------------------------------------
-   Ce fichier ne contient QUE des données simulées.
-   Il sera supprimé le jour où l'API réelle est branchée
-   (voir js/api.js → ERP.Api.config.mode = 'http').
+   Aucune donnée de démonstration ici : ERP.DB démarre vide et
+   n'est peuplé qu'après connexion, par de vrais appels API
+   (voir enterApp() dans js/app.js) — un nouvel ingénieur voit
+   donc une application réellement vide, jamais un jeu de démo
+   local. Les données de démonstration, quand un admin choisit
+   d'en charger pour une entreprise, sont générées côté serveur
+   et vivent exclusivement dans Supabase.
    ========================================================= */
 window.ERP = window.ERP || {};
 
 (function (ERP) {
   'use strict';
 
-  /* ---------- Date de référence de la démo -------------------------
-     Mettre `new Date()` pour utiliser la vraie date du jour.        */
-  const TODAY = '2026-08-14';
-
-  /* ---------- Utilitaires de date ---------- */
+  /* ---------- Date du jour réelle (pas de date figée de démo) ---------- */
   const dt = {
-    today: () => TODAY,
     parse: (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); },
     iso: (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`,
     add: (s, n) => { const d = dt.parse(s); d.setDate(d.getDate() + n); return dt.iso(d); },
     diff: (a, b) => Math.round((dt.parse(b) - dt.parse(a)) / 86400000),
     isWeekend: (s) => [0, 6].includes(dt.parse(s).getDay())
   };
+  ERP.dt = dt;
 
-  /* ---------- Générateur pseudo-aléatoire déterministe ----------
-     Même jeu de données à chaque rechargement.                  */
-  function seeded(seed) {
-    let a = seed >>> 0;
-    return function () {
-      a += 0x6D2B79F5;
-      let t = a;
-      t = Math.imul(t ^ (t >>> 15), t | 1);
-      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
-  }
-  const hash = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; };
-
-  /* =======================================================
-     UTILISATEUR
-     ======================================================= */
-  const user = {
-    id: 'U-01', firstName: 'Ahmed', name: 'Ahmed Ben Ali', initials: 'AB',
-    role: 'Chef de projet', email: 'a.benali@batipilot.tn', phone: '+216 98 412 337',
-    agency: 'Agence Grand Tunis', since: '2019-04-01'
-  };
-
-  /* =======================================================
-     CLIENTS (20)
-     ======================================================= */
-  const CLIENT_ROWS = [
-    // [contact, société, ville, tel, email, statut, depuis]
-    ['Slim Trabelsi', 'Société ABC Immobilier', 'Tunis', '71 842 100', 'contact@abc-immo.tn', 'actif', '2021-03-12'],
-    ['Mohamed Ben Ali', 'Ben Ali Investissements', 'La Marsa', '71 774 902', 'm.benali@bai.tn', 'actif', '2023-06-02'],
-    ['Leïla Mansouri', 'Carthage Développement', 'Carthage', '71 730 445', 'l.mansouri@carthagedev.tn', 'actif', '2020-09-18'],
-    ['Hédi Gharbi', 'Immobilière El Yasmine', 'Tunis', '71 890 220', 'h.gharbi@elyasmine.tn', 'actif', '2019-11-05'],
-    ['Sonia Belhaj', 'Municipalité de Sousse', 'Sousse', '73 224 800', 's.belhaj@commune-sousse.tn', 'actif', '2025-12-01'],
-    ['Karim Jelassi', 'Sahara Agro-Industries', 'Sfax', '74 402 615', 'k.jelassi@saharagro.tn', 'actif', '2022-02-14'],
-    ['Nizar Chaabane', 'Marina Resorts Hammamet', 'Hammamet', '72 281 340', 'n.chaabane@marinaresorts.tn', 'actif', '2024-05-20'],
-    ['Faouzi Mzali', 'Groupe Medina Invest', 'Bizerte', '72 431 077', 'f.mzali@medinainvest.tn', 'actif', '2026-01-09'],
-    ['Rania Khediri', 'Tunisie Habitat Plus', 'Ariana', '71 706 512', 'r.khediri@habitatplus.tn', 'actif', '2021-07-30'],
-    ['Wassim Bouazizi', 'SOPROMED Promotion', 'Nabeul', '72 220 908', 'w.bouazizi@sopromed.tn', 'actif', '2020-04-22'],
-    ['Imen Farhat', 'Résidences Ennour', 'Monastir', '73 461 233', 'i.farhat@ennour.tn', 'inactif', '2019-02-11'],
-    ['Ali Zouaoui', 'Bâti-Sud Constructions', 'Gabès', '75 271 604', 'a.zouaoui@batisud.tn', 'actif', '2022-10-03'],
-    ['Nadia Riahi', 'Clinique El Amen Nord', 'Ariana', '71 810 470', 'n.riahi@amennord.tn', 'prospect', '2026-05-14'],
-    ['Sofiane Kacem', 'Kacem Frères Négoce', 'Sfax', '74 226 118', 's.kacem@kacemfreres.tn', 'actif', '2023-01-27'],
-    ['Amel Ben Youssef', 'Groupe Scolaire Al Kindi', 'Tunis', '71 285 663', 'direction@alkindi.tn', 'actif', '2024-08-16'],
-    ['Tarek Haddad', 'Haddad Logistique', 'Radès', '71 449 205', 't.haddad@haddadlog.tn', 'actif', '2021-12-09'],
-    ['Salma Bouzid', 'Yasmine Retail Park', 'Hammamet', '72 245 771', 's.bouzid@yasmineretail.tn', 'prospect', '2026-06-03'],
-    ['Habib Ouertani', 'Société Immobilière du Nord', 'Bizerte', '72 400 310', 'h.ouertani@sin.tn', 'actif', '2020-06-15'],
-    ['Yosra Chebbi', 'Clinique Dentaire Chebbi', 'La Soukra', '71 866 924', 'y.chebbi@dentaire.tn', 'actif', '2025-03-28'],
-    ['Mounir Sassi', 'Sassi Industries', 'Ben Arous', '71 380 546', 'm.sassi@sassi-ind.tn', 'inactif', '2018-10-01']
-  ];
-  const clients = CLIENT_ROWS.map((r, i) => ({
-    id: 'CLI-' + String(i + 1).padStart(3, '0'),
-    contact: r[0], company: r[1], city: r[2],
-    phone: '+216 ' + r[3], email: r[4], status: r[5], since: r[6],
-    address: `${['Rue de la Liberté', 'Avenue Habib Bourguiba', 'Rue Ibn Khaldoun', 'Avenue de la République', 'Rue du Lac Léman'][i % 5]} ${10 + i * 3}, ${r[2]}`
-  }));
-
-  /* =======================================================
-     PROJETS — 8 en activité + 12 terminés
-     ======================================================= */
-  const projects = [
-    {
-      id: 'PRJ-001', ref: 'CHT-2026-001', name: 'Résidence Les Jardins', clientId: 'CLI-001',
-      address: 'Cité Ennasr II, Ariana', city: 'Ariana', manager: 'Ahmed Ben Ali',
-      start: '2026-02-12', end: '2026-09-30', status: 'en_cours', progress: 72,
-      budget: 320000, spent: 230400, type: 'Logements collectifs — 3 blocs / 42 appartements',
-      phases: [
-        { name: 'Gros œuvre', start: '2026-02-12', end: '2026-05-30', progress: 100, lead: 'Mohamed Ali Ben Salah' },
-        { name: 'Électricité', start: '2026-05-15', end: '2026-08-11', progress: 78, lead: 'Sami Ben Amor' },
-        { name: 'Plomberie', start: '2026-06-01', end: '2026-09-05', progress: 62, lead: 'Nabil Gharbi' },
-        { name: 'Finitions', start: '2026-08-01', end: '2026-09-30', progress: 24, lead: 'Hatem Zouari' }
-      ]
-    },
-    {
-      id: 'PRJ-002', ref: 'CHT-2026-002', name: 'Villa Ben Ali', clientId: 'CLI-002',
-      address: 'Route de Gammarth, La Marsa', city: 'La Marsa', manager: 'Ahmed Ben Ali',
-      start: '2026-03-15', end: '2026-08-31', status: 'en_retard', progress: 61,
-      budget: 145000, spent: 119000, type: 'Villa individuelle R+1 avec piscine',
-      phases: [
-        { name: 'Gros œuvre', start: '2026-03-15', end: '2026-06-10', progress: 100, lead: 'Khaled Trabelsi' },
-        { name: 'Électricité', start: '2026-06-01', end: '2026-07-25', progress: 85, lead: 'Sami Ben Amor' },
-        { name: 'Plomberie', start: '2026-06-10', end: '2026-08-05', progress: 70, lead: 'Anis Mabrouk' },
-        { name: 'Finitions', start: '2026-07-15', end: '2026-08-31', progress: 30, lead: 'Youssef Sassi' }
-      ]
-    },
-    {
-      id: 'PRJ-003', ref: 'CHT-2026-003', name: 'Centre commercial Carthage Plaza', clientId: 'CLI-003',
-      address: 'Avenue de Carthage, Carthage', city: 'Carthage', manager: 'Sonia Belhaj',
-      start: '2026-01-05', end: '2027-02-28', status: 'en_cours', progress: 48,
-      budget: 280000, spent: 190400, type: 'Centre commercial — 8 400 m² sur 2 niveaux',
-      phases: [
-        { name: 'Gros œuvre', start: '2026-01-05', end: '2026-08-15', progress: 88, lead: 'Bilel Haddad' },
-        { name: 'Électricité', start: '2026-07-01', end: '2026-11-30', progress: 22, lead: 'Ridha Ben Youssef' },
-        { name: 'Plomberie', start: '2026-07-15', end: '2026-11-15', progress: 18, lead: 'Slim Nasri' },
-        { name: 'Finitions', start: '2026-10-01', end: '2027-02-15', progress: 0, lead: 'Fethi Chaouch' }
-      ]
-    },
-    {
-      id: 'PRJ-004', ref: 'CHT-2025-014', name: 'Immeuble El Manar', clientId: 'CLI-004',
-      address: 'El Manar I, Tunis', city: 'Tunis', manager: 'Ahmed Ben Ali',
-      start: '2025-10-20', end: '2026-09-30', status: 'en_retard', progress: 55,
-      budget: 165000, spent: 135300, type: 'Immeuble R+4 — 16 appartements',
-      phases: [
-        { name: 'Gros œuvre', start: '2025-10-20', end: '2026-02-28', progress: 100, lead: 'Lotfi Bouzid' },
-        { name: 'Électricité', start: '2026-03-01', end: '2026-06-30', progress: 62, lead: 'Walid Khelifi' },
-        { name: 'Plomberie', start: '2026-03-15', end: '2026-07-31', progress: 58, lead: 'Mehdi Jaziri' },
-        { name: 'Finitions', start: '2026-06-01', end: '2026-09-30', progress: 12, lead: 'Karim Ayadi' }
-      ]
-    },
-    {
-      id: 'PRJ-005', ref: 'CHT-2026-004', name: 'Complexe sportif Sousse', clientId: 'CLI-005',
-      address: 'Zone sportive, Sousse Nord', city: 'Sousse', manager: 'Sonia Belhaj',
-      start: '2026-09-01', end: '2027-06-30', status: 'en_preparation', progress: 12,
-      budget: 90000, spent: 10800, type: 'Salle omnisports 1 200 places',
-      phases: [
-        { name: 'Terrassement', start: '2026-09-01', end: '2026-10-15', progress: 0, lead: 'Aymen Dridi' },
-        { name: 'Gros œuvre', start: '2026-09-20', end: '2027-02-28', progress: 0, lead: 'Tarek Ben Hassine' },
-        { name: 'Électricité', start: '2027-01-05', end: '2027-04-30', progress: 0, lead: 'Hamza Souissi' },
-        { name: 'Finitions', start: '2027-04-01', end: '2027-06-30', progress: 0, lead: 'Chokri Rekik' }
-      ]
-    },
-    {
-      id: 'PRJ-006', ref: 'CHT-2026-005', name: 'Extension usine agro Sfax', clientId: 'CLI-006',
-      address: 'Zone industrielle Poudrière, Sfax', city: 'Sfax', manager: 'Karim Jelassi',
-      start: '2026-03-10', end: '2026-11-15', status: 'en_cours', progress: 74,
-      budget: 120000, spent: 90700, type: 'Hangar industriel 2 200 m² + quai de chargement',
-      phases: [
-        { name: 'Gros œuvre', start: '2026-03-10', end: '2026-07-20', progress: 100, lead: 'Marwen Ferchichi' },
-        { name: 'Charpente métallique', start: '2026-06-15', end: '2026-09-10', progress: 76, lead: 'Zied Ben Romdhane' },
-        { name: 'Électricité', start: '2026-07-01', end: '2026-10-20', progress: 54, lead: 'Oussama Guesmi' },
-        { name: 'Finitions', start: '2026-09-15', end: '2026-11-15', progress: 8, lead: 'Adel Mejri' }
-      ]
-    },
-    {
-      id: 'PRJ-007', ref: 'CHT-2026-006', name: 'Hôtel Marina — rénovation', clientId: 'CLI-007',
-      address: 'Marina Yasmine, Hammamet', city: 'Hammamet', manager: 'Ahmed Ben Ali',
-      start: '2026-01-15', end: '2026-09-30', status: 'en_cours', progress: 66,
-      budget: 85000, spent: 68000, type: 'Rénovation de 64 chambres + espaces communs',
-      phases: [
-        { name: 'Démolition', start: '2026-01-15', end: '2026-03-05', progress: 100, lead: 'Sofien Ben Salem' },
-        { name: 'Plomberie', start: '2026-02-20', end: '2026-06-30', progress: 92, lead: 'Imed Kacem' },
-        { name: 'Électricité', start: '2026-03-01', end: '2026-07-31', progress: 88, lead: 'Jalel Ouertani' },
-        { name: 'Finitions', start: '2026-06-01', end: '2026-09-30', progress: 41, lead: 'Moez Baccouche' }
-      ]
-    },
-    {
-      id: 'PRJ-008', ref: 'CHT-2026-007', name: 'Lotissement Erriadh', clientId: 'CLI-008',
-      address: 'Erriadh, Bizerte Sud', city: 'Bizerte', manager: 'Faouzi Mzali',
-      start: '2026-08-01', end: '2027-05-31', status: 'en_preparation', progress: 15,
-      budget: 45000, spent: 5400, type: 'Viabilisation de 36 lots + voirie',
-      phases: [
-        { name: 'Études & bornage', start: '2026-08-01', end: '2026-09-15', progress: 55, lead: 'Nizar Hamdi' },
-        { name: 'Terrassement', start: '2026-09-10', end: '2026-12-20', progress: 0, lead: 'Rafik Sghaier' },
-        { name: 'Réseaux', start: '2026-11-01', end: '2027-03-15', progress: 0, lead: 'Skander Ayari' },
-        { name: 'Voirie', start: '2027-02-01', end: '2027-05-31', progress: 0, lead: 'Taoufik Ben Ammar' }
-      ]
-    }
-  ];
-
-  /* --- 12 projets terminés (historique) --- */
-  const DONE_ROWS = [
-    ['Résidence Al Amal', 'CLI-009', 'Ariana', 210000, '2024-02-05', '2025-01-20'],
-    ['Villa Trabelsi', 'CLI-001', 'La Soukra', 98000, '2024-05-12', '2024-12-18'],
-    ['Dépôt logistique Radès', 'CLI-016', 'Radès', 176000, '2024-01-08', '2024-10-30'],
-    ['Groupe scolaire Al Kindi', 'CLI-015', 'Tunis', 143000, '2024-07-01', '2025-06-15'],
-    ['Clinique dentaire Chebbi', 'CLI-019', 'La Soukra', 64000, '2025-03-03', '2025-09-12'],
-    ['Immeuble Ennour', 'CLI-011', 'Monastir', 152000, '2023-09-11', '2024-11-05'],
-    ['Siège Kacem Frères', 'CLI-014', 'Sfax', 118000, '2024-04-15', '2025-03-28'],
-    ['Résidence Les Oliviers', 'CLI-010', 'Nabeul', 187000, '2024-06-20', '2025-08-10'],
-    ['Entrepôt Sassi Industries', 'CLI-020', 'Ben Arous', 96000, '2023-11-06', '2024-08-22'],
-    ['Villa Mzali', 'CLI-008', 'Bizerte', 88000, '2025-01-15', '2025-10-04'],
-    ['Résidence du Lac', 'CLI-004', 'Tunis', 234000, '2024-03-01', '2025-05-30'],
-    ['Centre médical Bâti-Sud', 'CLI-012', 'Gabès', 105000, '2025-02-10', '2026-01-15']
-  ];
-  DONE_ROWS.forEach((r, i) => {
-    projects.push({
-      id: 'PRJ-' + String(100 + i), ref: 'CHT-ARCH-' + String(i + 1).padStart(3, '0'),
-      name: r[0], clientId: r[1], address: r[2], city: r[2], manager: 'Ahmed Ben Ali',
-      start: r[4], end: r[5], status: 'termine', progress: 100,
-      budget: r[3], spent: Math.round(r[3] * (0.92 + (i % 5) * 0.02)), type: 'Projet livré et réceptionné',
-      phases: [{ name: 'Chantier complet', start: r[4], end: r[5], progress: 100, lead: 'Ahmed Ben Ali' }]
-    });
-  });
-
-  /* =======================================================
-     OUVRIERS (50)
-     ======================================================= */
-  const WORKER_ROWS = [
-    'Mohamed Ali Ben Salah|Chef d\'équipe|PRJ-001', 'Sami Ben Amor|Électricien|PRJ-001',
-    'Khaled Trabelsi|Maçon|PRJ-002', 'Nabil Gharbi|Plombier|PRJ-001',
-    'Anis Mabrouk|Plombier|PRJ-002', 'Hatem Zouari|Peintre|PRJ-001',
-    'Youssef Sassi|Carreleur|PRJ-002', 'Bilel Haddad|Chef d\'équipe|PRJ-003',
-    'Ridha Ben Youssef|Électricien|PRJ-003', 'Slim Nasri|Plombier|PRJ-003',
-    'Fethi Chaouch|Peintre|PRJ-003', 'Lotfi Bouzid|Coffreur|PRJ-004',
-    'Walid Khelifi|Électricien|PRJ-004', 'Mehdi Jaziri|Plombier|PRJ-004',
-    'Karim Ayadi|Plâtrier|PRJ-004', 'Aymen Dridi|Conducteur d\'engin|PRJ-005',
-    'Tarek Ben Hassine|Maçon|PRJ-005', 'Hamza Souissi|Électricien|PRJ-005',
-    'Chokri Rekik|Menuisier|PRJ-005', 'Marwen Ferchichi|Chef d\'équipe|PRJ-006',
-    'Zied Ben Romdhane|Soudeur|PRJ-006', 'Oussama Guesmi|Électricien|PRJ-006',
-    'Adel Mejri|Peintre|PRJ-006', 'Sofien Ben Salem|Manœuvre|PRJ-007',
-    'Imed Kacem|Plombier|PRJ-007', 'Jalel Ouertani|Électricien|PRJ-007',
-    'Moez Baccouche|Carreleur|PRJ-007', 'Nizar Hamdi|Géomètre|PRJ-008',
-    'Rafik Sghaier|Conducteur d\'engin|PRJ-008', 'Skander Ayari|Maçon|PRJ-008',
-    'Taoufik Ben Ammar|Manœuvre|PRJ-008', 'Wajdi Louati|Ferrailleur|PRJ-001',
-    'Yassine Chebbi|Maçon|PRJ-001', 'Amine Ben Cheikh|Coffreur|PRJ-001',
-    'Bechir Zaidi|Manœuvre|PRJ-001', 'Chedly Mansour|Maçon|PRJ-003',
-    'Dhia Ben Slimane|Ferrailleur|PRJ-003', 'Elyes Hammami|Grutier|PRJ-003',
-    'Firas Bouzidi|Manœuvre|PRJ-003', 'Ghazi Toumi|Coffreur|PRJ-003',
-    'Hichem Ben Abdallah|Maçon|PRJ-004', 'Issam Douzi|Manœuvre|PRJ-004',
-    'Jaber Mathlouthi|Étancheur|PRJ-004', 'Kamel Riahi|Soudeur|PRJ-006',
-    'Lassaad Ben Fraj|Manœuvre|PRJ-006', 'Makrem Selmi|Menuisier|PRJ-006',
-    'Nader Bettaieb|Peintre|PRJ-007', 'Omar Jendoubi|Plâtrier|PRJ-007',
-    'Riadh Hamrouni|Maçon|PRJ-002', 'Sabri Ben Othman|Manœuvre|PRJ-002'
-  ];
-  const RATE = {
-    'Chef d\'équipe': 22, 'Maçon': 16, 'Coffreur': 17, 'Ferrailleur': 17, 'Électricien': 19,
-    'Plombier': 19, 'Peintre': 15, 'Carreleur': 16, 'Menuisier': 18, 'Soudeur': 20,
-    'Grutier': 21, 'Conducteur d\'engin': 20, 'Manœuvre': 12, 'Plâtrier': 15,
-    'Étancheur': 17, 'Géomètre': 24
-  };
-  const workers = WORKER_ROWS.map((row, i) => {
-    const [name, trade, projectId] = row.split('|');
-    const rnd = seeded(hash(name));
-    return {
-      id: 'OUV-' + String(i + 1).padStart(3, '0'),
-      matricule: 'M' + String(1240 + i * 3),
-      name, trade, projectId,
-      phone: '+216 ' + (20 + Math.floor(rnd() * 79)) + ' ' + String(Math.floor(rnd() * 900) + 100) + ' ' + String(Math.floor(rnd() * 900) + 100),
-      rate: RATE[trade] || 15,
-      cnss: 'CNSS-' + String(80000 + i * 137),
-      since: `20${19 + (i % 7)}-${String(1 + (i % 12)).padStart(2, '0')}-05`,
-      contract: i % 6 === 0 ? 'CDI' : (i % 3 === 0 ? 'CDD' : 'Journalier')
-    };
-  });
-
-  /* =======================================================
-     ARTICLES / MATÉRIAUX (40)
-     ======================================================= */
-  const ARTICLE_ROWS = [
-    // [désignation, catégorie, unité, stock, seuil, prix, fournisseur]
-    ['Ciment CEM II 25 kg', 'Gros œuvre', 'sac', 320, 200, 12.5, 'Ciments de Bizerte'],
-    ['Ciment blanc 25 kg', 'Gros œuvre', 'sac', 46, 60, 21.0, 'Ciments de Bizerte'],
-    ['Sable de carrière', 'Gros œuvre', 'm³', 84, 40, 38.0, 'Carrières du Nord'],
-    ['Sable de mer lavé', 'Gros œuvre', 'm³', 22, 30, 44.0, 'Carrières du Nord'],
-    ['Gravier 8/15', 'Gros œuvre', 'm³', 61, 35, 42.0, 'Carrières du Nord'],
-    ['Gravier 15/25', 'Gros œuvre', 'm³', 0, 25, 41.0, 'Carrières du Nord'],
-    ['Brique 12 trous', 'Gros œuvre', 'unité', 12400, 5000, 0.85, 'Briqueterie El Fejja'],
-    ['Brique 8 trous', 'Gros œuvre', 'unité', 3800, 4000, 0.72, 'Briqueterie El Fejja'],
-    ['Hourdis 16', 'Gros œuvre', 'unité', 950, 600, 2.4, 'Préfa Manouba'],
-    ['Béton prêt B25', 'Gros œuvre', 'm³', 0, 10, 168.0, 'BétonPlus Tunisie'],
-    ['Fer à béton Ø8', 'Ferraillage', 'barre', 410, 250, 14.2, 'Sidérurgie El Fouladh'],
-    ['Fer à béton Ø10', 'Ferraillage', 'barre', 265, 200, 19.6, 'Sidérurgie El Fouladh'],
-    ['Fer à béton Ø12', 'Ferraillage', 'barre', 180, 200, 27.4, 'Sidérurgie El Fouladh'],
-    ['Fer à béton Ø14', 'Ferraillage', 'barre', 92, 80, 36.8, 'Sidérurgie El Fouladh'],
-    ['Fer à béton Ø16', 'Ferraillage', 'barre', 38, 60, 48.5, 'Sidérurgie El Fouladh'],
-    ['Treillis soudé 6 m²', 'Ferraillage', 'panneau', 74, 40, 62.0, 'Sidérurgie El Fouladh'],
-    ['Fil de ligature 1 kg', 'Ferraillage', 'kg', 145, 60, 3.9, 'Quincaillerie Zitouna'],
-    ['Câble 3G2,5 (couronne 100 m)', 'Électricité', 'couronne', 28, 15, 186.0, 'Électro Médina'],
-    ['Câble 3G1,5 (couronne 100 m)', 'Électricité', 'couronne', 34, 15, 124.0, 'Électro Médina'],
-    ['Gaine ICTA Ø20 (25 m)', 'Électricité', 'rouleau', 62, 30, 21.5, 'Électro Médina'],
-    ['Tableau électrique 24 modules', 'Électricité', 'unité', 9, 10, 148.0, 'Électro Médina'],
-    ['Disjoncteur 16 A', 'Électricité', 'unité', 120, 50, 18.4, 'Électro Médina'],
-    ['Prise encastrée 16 A', 'Électricité', 'unité', 240, 100, 7.8, 'Électro Médina'],
-    ['Interrupteur simple', 'Électricité', 'unité', 186, 100, 6.9, 'Électro Médina'],
-    ['Tube PVC Ø100 (4 m)', 'Plomberie', 'barre', 96, 50, 32.0, 'Plasto Sfax'],
-    ['Tube PVC Ø50 (4 m)', 'Plomberie', 'barre', 128, 60, 17.5, 'Plasto Sfax'],
-    ['Tube PPR Ø25 (4 m)', 'Plomberie', 'barre', 74, 60, 14.8, 'Plasto Sfax'],
-    ['Coude PVC Ø100', 'Plomberie', 'unité', 210, 80, 4.6, 'Plasto Sfax'],
-    ['Robinet d\'arrêt 1/2"', 'Plomberie', 'unité', 58, 40, 12.2, 'Plasto Sfax'],
-    ['WC complet céramique', 'Plomberie', 'unité', 14, 12, 235.0, 'Sanitaire El Menzah'],
-    ['Peinture acrylique blanche 20 L', 'Finition', 'seau', 41, 25, 128.0, 'Peintures Carthage'],
-    ['Peinture façade 20 L', 'Finition', 'seau', 18, 20, 176.0, 'Peintures Carthage'],
-    ['Enduit de lissage 25 kg', 'Finition', 'sac', 88, 50, 18.9, 'Peintures Carthage'],
-    ['Carrelage 60×60 grès', 'Finition', 'm²', 640, 300, 34.0, 'Céramique Nabeul'],
-    ['Faïence 25×40', 'Finition', 'm²', 210, 150, 24.5, 'Céramique Nabeul'],
-    ['Colle à carrelage 25 kg', 'Finition', 'sac', 132, 80, 16.4, 'Céramique Nabeul'],
-    ['Porte intérieure bois', 'Menuiserie', 'unité', 26, 20, 285.0, 'Menuiserie Ben Slimane'],
-    ['Fenêtre alu 1,2×1,2 m', 'Menuiserie', 'unité', 11, 15, 420.0, 'Alu Design Tunis'],
-    ['Membrane d\'étanchéité 10 m²', 'Étanchéité', 'rouleau', 24, 20, 168.0, 'Étanche Pro'],
-    ['Gasoil groupe électrogène', 'Équipement', 'litre', 480, 300, 2.5, 'Station Sud Carburants']
-  ];
-  /* =========================================================
-     FOURNISSEURS
-     Chaque article est rattaché à un fournisseur ; les matériaux
-     « à la une » sont ceux que le chef de projet commande en priorité.
-     ========================================================= */
-  const SUPPLIER_ROWS = [
-    // [raison sociale, interlocuteur, téléphone, e-mail, adresse, ville, spécialité, délai (j), note /5]
-    ['Ciments de Bizerte', 'Slim Chaabane', '+216 72 430 118', 'commercial@cimentsbizerte.tn', 'Zone industrielle, route de Tunis', 'Bizerte', 'Liants et ciments', 3, 4.6],
-    ['Carrières du Nord', 'Nizar Ouertani', '+216 78 512 640', 'ventes@carrieresdunord.tn', 'Route de Béja km 8', 'Jendouba', 'Granulats et sables', 2, 4.2],
-    ['Sidérurgie El Fouladh', 'Ridha Belkhiria', '+216 72 386 900', 'contact@elfouladh.com.tn', 'Menzel Bourguiba, zone portuaire', 'Bizerte', 'Ferraillage et treillis', 5, 4.4],
-    ['Briqueterie El Fejja', 'Mounir Jendoubi', '+216 71 645 230', 'commande@briqueteriefejja.tn', 'El Fejja, route de Zaghouan', 'Manouba', 'Briques et hourdis', 2, 3.9],
-    ['BétonPlus Tunisie', 'Faten Trabelsi', '+216 71 902 455', 'bpe@betonplus.tn', 'Centrale à béton, Mghira', 'Ben Arous', 'Béton prêt à l\'emploi', 1, 4.8],
-    ['Préfa Manouba', 'Hichem Gharbi', '+216 71 604 812', 'devis@prefamanouba.tn', 'Zone industrielle Douar Hicher', 'Manouba', 'Éléments préfabriqués', 6, 3.7],
-    ['Électro Médina', 'Sonia Ben Romdhane', '+216 71 337 902', 'pro@electromedina.tn', '14 rue de Marseille', 'Tunis', 'Matériel électrique', 2, 4.5],
-    ['Plasto Sfax', 'Anouar Kammoun', '+216 74 611 350', 'ventes@plastosfax.tn', 'Route de Gabès km 4', 'Sfax', 'Tubes et raccords PVC', 4, 4.1],
-    ['Sanitaire El Menzah', 'Leila Mrabet', '+216 71 236 448', 'showroom@sanitairemenzah.tn', 'Avenue Hédi Nouira, El Menzah 6', 'Tunis', 'Sanitaire et robinetterie', 3, 4.3],
-    ['Céramique Nabeul', 'Karim Zouaoui', '+216 72 285 117', 'export@ceramiquenabeul.tn', 'Route de Hammamet km 3', 'Nabeul', 'Carrelage et faïence', 4, 4.7],
-    ['Peintures Carthage', 'Yassine Haddad', '+216 71 771 265', 'commercial@peinturescarthage.tn', 'Zone industrielle Charguia II', 'Ariana', 'Peintures et enduits', 2, 4.0],
-    ['Alu Design Tunis', 'Skander Ayari', '+216 71 428 733', 'projets@aludesign.tn', 'Route de Bizerte km 12', 'Ariana', 'Menuiserie aluminium', 12, 3.8],
-    ['Menuiserie Ben Slimane', 'Habib Ben Slimane', '+216 73 342 906', 'atelier@menuiseriebs.tn', 'Zone artisanale, Msaken', 'Sousse', 'Menuiserie bois', 10, 4.4],
-    ['Étanche Pro', 'Amine Chérif', '+216 71 860 214', 'technique@etanchepro.tn', 'Rue de l\'Artisanat, Ben Arous', 'Ben Arous', 'Étanchéité et isolation', 3, 4.2],
-    ['Quincaillerie Zitouna', 'Nabil Zitouna', '+216 71 561 099', 'quincaillerie.zitouna@gnet.tn', '32 avenue de la République', 'Tunis', 'Quincaillerie générale', 1, 4.1],
-    ['Station Sud Carburants', 'Walid Msakni', '+216 75 224 780', 'pro@stationsud.tn', 'Route de Médenine', 'Gabès', 'Carburants et lubrifiants', 1, 3.6],
-    ['Dépôt Sfax', 'Imed Chaari', '+216 74 402 118', 'depot.sfax@materiaux.tn', 'Route de Tunis km 6', 'Sfax', 'Matériaux généraux', 2, 3.9]
-  ];
-
-  const suppliers = SUPPLIER_ROWS.map((r, i) => ({
-    id: 'FRN-' + String(i + 1).padStart(3, '0'),
-    company: r[0], contact: r[1], phone: r[2], email: r[3],
-    address: r[4], city: r[5], specialty: r[6],
-    leadDays: r[7], rating: r[8],
-    taxId: `${1200000 + i * 137}/A/M/000`,
-    payment: ['30 jours fin de mois', 'Comptant à la livraison', '45 jours', '60 jours fin de mois'][i % 4],
-    since: dt.add(TODAY, -(400 + i * 53)),
-    status: i % 9 === 4 ? 'occasionnel' : 'actif',
-    featured: [],          // matériaux à la une, renseignés après création des articles
-    note: ''
-  }));
-
-  const supplierByName = (name) => suppliers.find(s => s.company === name);
-
-  const articles = ARTICLE_ROWS.map((r, i) => {
-    const stock = r[3], min = r[4];
-    const sup = supplierByName(r[6]);
-    return {
-      id: 'ART-' + String(i + 1).padStart(3, '0'),
-      ref: 'MAT-' + String(i + 1).padStart(4, '0'),
-      name: r[0], category: r[1], unit: r[2],
-      stock, min, price: r[5],
-      supplier: r[6], supplierId: sup ? sup.id : null,
-      location: ['Dépôt central Tunis', 'Dépôt chantier PRJ-001', 'Dépôt Sfax'][i % 3],
-      lastEntry: dt.add(TODAY, -(3 + (i % 28))),
-      stockStatus: stock === 0 ? 'rupture' : (stock < min ? 'faible' : 'ok')
-    };
-  });
-
-  /* Matériaux « à la une » : les deux premières références de chaque fournisseur */
-  suppliers.forEach(s => {
-    s.featured = articles.filter(a => a.supplierId === s.id).slice(0, 2).map(a => a.id);
-  });
-
-  /* =======================================================
-     TÂCHES (30) — 5 en retard
-     ======================================================= */
-  const TASK_ROWS = [
-    // [titre, projet, responsable, priorité, début, échéance, progression, statut]
-    ['Coulage dalle niveau 3 — bloc B', 'PRJ-001', 'Mohamed Ali Ben Salah', 'haute', '2026-08-10', '2026-08-18', 45, 'en_cours'],
-    ['Tirage des câbles bloc A', 'PRJ-001', 'Sami Ben Amor', 'haute', '2026-07-20', '2026-08-11', 78, 'en_cours'],
-    ['Pose des sanitaires bloc A', 'PRJ-001', 'Nabil Gharbi', 'moyenne', '2026-08-05', '2026-08-28', 30, 'en_cours'],
-    ['Enduit façade nord', 'PRJ-001', 'Hatem Zouari', 'basse', '2026-08-20', '2026-09-15', 0, 'a_faire'],
-    ['Réception béton — attente livraison', 'PRJ-001', 'Amine Ben Cheikh', 'haute', '2026-08-12', '2026-08-13', 20, 'bloque'],
-    ['Ferraillage poteaux niveau 4', 'PRJ-001', 'Wajdi Louati', 'moyenne', '2026-08-14', '2026-08-24', 0, 'a_faire'],
-    ['Étanchéité toiture terrasse', 'PRJ-002', 'Anis Mabrouk', 'haute', '2026-07-28', '2026-08-19', 60, 'en_cours'],
-    ['Pose carrelage rez-de-chaussée', 'PRJ-002', 'Youssef Sassi', 'moyenne', '2026-08-01', '2026-08-25', 55, 'en_cours'],
-    ['Raccordement tableau électrique', 'PRJ-002', 'Sami Ben Amor', 'haute', '2026-08-03', '2026-08-18', 80, 'en_cours'],
-    ['Livraison menuiserie alu — fournisseur en retard', 'PRJ-002', 'Khaled Trabelsi', 'haute', '2026-07-25', '2026-08-05', 0, 'bloque'],
-    ['Aménagement piscine', 'PRJ-002', 'Riadh Hamrouni', 'basse', '2026-08-18', '2026-08-30', 0, 'a_faire'],
-    ['Coffrage voile parking niveau -1', 'PRJ-003', 'Ghazi Toumi', 'haute', '2026-08-04', '2026-08-20', 62, 'en_cours'],
-    ['Montage grue secteur est', 'PRJ-003', 'Elyes Hammami', 'moyenne', '2026-07-15', '2026-07-30', 100, 'termine'],
-    ['Plan de calepinage galerie', 'PRJ-003', 'Bilel Haddad', 'moyenne', '2026-08-10', '2026-09-05', 25, 'en_cours'],
-    ['Chemins de câbles zone commerciale', 'PRJ-003', 'Ridha Ben Youssef', 'moyenne', '2026-08-12', '2026-09-20', 15, 'en_cours'],
-    ['Réseau évacuation eaux pluviales', 'PRJ-003', 'Slim Nasri', 'basse', '2026-09-01', '2026-10-10', 0, 'a_faire'],
-    ['Reprise fissures façade sud', 'PRJ-004', 'Hichem Ben Abdallah', 'haute', '2026-07-10', '2026-08-01', 65, 'en_cours'],
-    ['Pose faux plafonds étages 2-4', 'PRJ-004', 'Karim Ayadi', 'moyenne', '2026-08-08', '2026-09-12', 20, 'en_cours'],
-    ['Contrôle conformité électrique', 'PRJ-004', 'Walid Khelifi', 'haute', '2026-08-15', '2026-08-29', 0, 'a_faire'],
-    ['Étanchéité terrasse — attente budget', 'PRJ-004', 'Jaber Mathlouthi', 'haute', '2026-08-06', '2026-08-10', 10, 'bloque'],
-    ['Colonne montante eau', 'PRJ-004', 'Mehdi Jaziri', 'moyenne', '2026-07-01', '2026-07-31', 100, 'termine'],
-    ['Dépôt du permis de bâtir', 'PRJ-005', 'Sonia Belhaj', 'haute', '2026-07-01', '2026-08-20', 70, 'en_cours'],
-    ['Étude géotechnique', 'PRJ-005', 'Nizar Hamdi', 'haute', '2026-06-15', '2026-07-25', 100, 'termine'],
-    ['Consultation entreprises terrassement', 'PRJ-005', 'Aymen Dridi', 'moyenne', '2026-08-18', '2026-09-05', 0, 'a_faire'],
-    ['Montage charpente travée 4-8', 'PRJ-006', 'Zied Ben Romdhane', 'haute', '2026-08-01', '2026-08-26', 58, 'en_cours'],
-    ['Alimentation électrique quai', 'PRJ-006', 'Oussama Guesmi', 'moyenne', '2026-08-10', '2026-09-15', 30, 'en_cours'],
-    ['Dalle quai de chargement', 'PRJ-006', 'Marwen Ferchichi', 'moyenne', '2026-06-20', '2026-07-28', 100, 'termine'],
-    ['Peinture chambres étage 3', 'PRJ-007', 'Nader Bettaieb', 'moyenne', '2026-08-05', '2026-08-22', 48, 'en_cours'],
-    ['Remplacement colonnes sanitaires', 'PRJ-007', 'Imed Kacem', 'haute', '2026-06-10', '2026-08-21', 92, 'en_cours'],
-    ['Bornage et implantation lots 1-12', 'PRJ-008', 'Nizar Hamdi', 'moyenne', '2026-08-04', '2026-09-10', 35, 'en_cours']
-  ];
-  const tasks = TASK_ROWS.map((r, i) => ({
-    id: 'TSK-' + String(i + 1).padStart(3, '0'),
-    title: r[0], projectId: r[1], assignee: r[2], priority: r[3],
-    start: r[4], due: r[5], progress: r[6], status: r[7],
-    createdAt: dt.add(r[4], -6)
-  }));
-
-  /* =======================================================
-     POINTAGES — générés par date, de façon déterministe
-     Aujourd'hui : 42 prévus, 37 présents, 5 absents, 284 h
-     ======================================================= */
-  const RUNNING = ['PRJ-001', 'PRJ-002', 'PRJ-003', 'PRJ-004', 'PRJ-006', 'PRJ-007'];
-  const scheduledWorkers = workers.filter(w => RUNNING.includes(w.projectId)); // 42
-
-  const ABSENCE_REASONS = ['Congé annuel', 'Arrêt maladie', 'Absence non justifiée', 'Congé annuel', 'Accident domestique'];
-
-  function buildTimesheets(date, targetHours) {
-    const rnd = seeded(hash('ts' + date));
-    const absentIdx = new Set();
-    while (absentIdx.size < 5) absentIdx.add(Math.floor(rnd() * scheduledWorkers.length));
-
-    const rows = scheduledWorkers.map((w, i) => {
-      if (absentIdx.has(i)) {
-        return {
-          id: `PTG-${date}-${w.id}`, date, workerId: w.id, worker: w.name, trade: w.trade,
-          projectId: w.projectId, in: null, out: null, breakMin: 0, hours: 0,
-          status: 'absent', note: ABSENCE_REASONS[absentIdx.size % 5] || 'Absence non justifiée'
-        };
-      }
-      const inMin = 7 * 60 + Math.round(rnd() * 30 - 10);               // 06:50 → 07:20
-      const outMin = 15 * 60 + 50 + Math.round(rnd() * 30);             // 15:50 → 16:20
-      const breakMin = 75 + Math.round(rnd() * 3) * 5;                  // 75 → 90 min (déjeuner)
-      return {
-        id: `PTG-${date}-${w.id}`, date, workerId: w.id, worker: w.name, trade: w.trade,
-        projectId: w.projectId,
-        in: inMin, out: outMin, breakMin,
-        hours: (outMin - inMin - breakMin) / 60,
-        status: inMin > 7 * 60 + 15 ? 'retard' : 'present',
-        note: inMin > 7 * 60 + 15 ? 'Arrivée tardive' : ''
-      };
-    });
-
-    // Calage sur le total attendu, réparti sur l'ensemble des présents
-    if (targetHours) {
-      const present = rows.filter(r => r.status !== 'absent');
-      const sum = present.reduce((s, r) => s + r.hours, 0);
-      const perWorker = Math.round((targetHours - sum) * 60 / present.length);
-      present.forEach(r => {
-        r.out += perWorker;
-        r.hours = (r.out - r.in - r.breakMin) / 60;
-      });
-      const last = present[present.length - 1];
-      const rest = targetHours - present.reduce((s, r) => s + r.hours, 0);
-      last.out += Math.round(rest * 60);
-      last.hours = (last.out - last.in - last.breakMin) / 60;
-    }
-    return rows;
-  }
-
-  const timesheetCache = {};
-  function timesheets(date) {
-    if (!timesheetCache[date]) {
-      timesheetCache[date] = buildTimesheets(date, date === TODAY ? 284 : null);
-    }
-    return timesheetCache[date];
-  }
-
-  /* =======================================================
-     DÉPENSES — 850 000 DT répartis par catégorie et par projet
-     ======================================================= */
-  const COST_CATEGORIES = [
-    { key: 'main_oeuvre', label: 'Main-d\'œuvre', share: 0.35, color: '#14395C' },
-    { key: 'materiaux', label: 'Matériaux', share: 0.30, color: '#E4651A' },
-    { key: 'sous_traitance', label: 'Sous-traitance', share: 0.15, color: '#1C6FA8' },
-    { key: 'equipement', label: 'Équipement', share: 0.09, color: '#17845A' },
-    { key: 'transport', label: 'Transport', share: 0.07, color: '#B26A05' },
-    { key: 'autres', label: 'Autres', share: 0.04, color: '#8698A9' }
-  ];
-
-  const expenses = [];
-  projects.filter(p => p.status !== 'termine').forEach((p) => {
-    const rnd = seeded(hash(p.id));
-    // Répartition par catégorie, pondérée puis normalisée sur le consommé du projet
-    const weights = COST_CATEGORIES.map(c => c.share * (0.8 + rnd() * 0.4));
-    const total = weights.reduce((a, b) => a + b, 0);
-    COST_CATEGORIES.forEach((c, i) => {
-      expenses.push({
-        id: `DEP-${p.id}-${c.key}`, projectId: p.id, category: c.key,
-        label: c.label, amount: Math.round(p.spent * weights[i] / total)
-      });
-    });
-  });
-
-  /* =======================================================
-     NOTIFICATIONS
-     ======================================================= */
-  const notifications = [
-    { id: 'N1', level: 'danger', title: 'Résidence Les Jardins en retard de 3 jours', text: 'Lot électricité — échéance dépassée le 11/08', time: 'Il y a 25 min', link: '#/projets/PRJ-001', read: false },
-    { id: 'N2', level: 'danger', title: 'Budget Villa Ben Ali au-delà de 80 %', text: '119 000 DT consommés sur 145 000 DT', time: 'Il y a 1 h', link: '#/budgets', read: false },
-    { id: 'N3', level: 'warn', title: 'Stock de ciment sous le seuil minimum', text: 'Ciment blanc 25 kg — 46 sacs restants (seuil 60)', time: 'Il y a 2 h', link: '#/articles', read: false },
-    { id: 'N4', level: 'warn', title: '5 ouvriers absents aujourd\'hui', text: 'Pointage du 14/08 — 37 présents sur 42 prévus', time: 'Il y a 3 h', link: '#/pointage', read: false },
-    { id: 'N5', level: 'info', title: 'Béton prêt B25 en rupture', text: 'Commande à passer auprès de BétonPlus Tunisie', time: 'Hier, 17:20', link: '#/articles', read: true },
-    { id: 'N6', level: 'info', title: 'Devis DEV-2026-118 accepté', text: 'Groupe Medina Invest — Lotissement Erriadh', time: 'Hier, 11:05', link: '#/clients/CLI-008', read: true }
-  ];
-
-  /* =======================================================
-     JOURNAL D'ACTIVITÉ (fil du dashboard)
-     ======================================================= */
-  const activity = [
-    { icon: 'check', tone: 'ok', title: 'Tâche terminée — Montage grue secteur est', meta: 'Elyes Hammami · Carthage Plaza', time: '08:12' },
-    { icon: 'package', tone: 'info', title: 'Livraison réceptionnée — 200 sacs de ciment', meta: 'Ciments de Bizerte · Les Jardins', time: '07:45' },
-    { icon: 'hardhat', tone: 'neutral', title: 'Pointage du matin validé', meta: '37 présents sur 42 prévus', time: '07:30' },
-    { icon: 'alert', tone: 'danger', title: 'Blocage signalé — attente livraison béton', meta: 'Amine Ben Cheikh · Les Jardins', time: 'Hier 16:50' },
-    { icon: 'wallet', tone: 'warn', title: 'Facture fournisseur enregistrée — 18 400 DT', meta: 'Sidérurgie El Fouladh', time: 'Hier 15:20' },
-    { icon: 'users', tone: 'info', title: 'Nouveau client ajouté — Yasmine Retail Park', meta: 'Salma Bouzid · Hammamet', time: 'Hier 10:05' }
-  ];
-
-  /* =======================================================
-     HISTORIQUE COMMERCIAL (fiche client)
-     ======================================================= */
-  function clientHistory(clientId) {
-    const rnd = seeded(hash(clientId));
-    const kinds = [
-      { type: 'Devis', ref: 'DEV', tone: 'info' },
-      { type: 'Commande', ref: 'CMD', tone: 'neutral' },
-      { type: 'Facture', ref: 'FAC', tone: 'warn' },
-      { type: 'Paiement', ref: 'PAY', tone: 'ok' },
-      { type: 'Échange', ref: 'COM', tone: 'neutral' }
-    ];
-    return Array.from({ length: 6 }, (_, i) => {
-      const k = kinds[Math.floor(rnd() * kinds.length)];
-      return {
-        type: k.type, tone: k.tone,
-        ref: `${k.ref}-2026-${String(100 + Math.floor(rnd() * 90))}`,
-        date: dt.add(TODAY, -Math.floor(rnd() * 240) - i * 5),
-        amount: k.type === 'Échange' ? null : Math.round((5 + rnd() * 60)) * 1000,
-        note: k.type === 'Échange' ? ['Appel téléphonique — avancement chantier', 'Réunion de chantier hebdomadaire', 'Visite du client sur site'][Math.floor(rnd() * 3)] : ''
-      };
-    }).sort((a, b) => b.date.localeCompare(a.date));
-  }
-
-  /* =========================================================
-     MATÉRIAUX AFFECTÉS AUX CHANTIERS
-     Sorties de stock déjà réalisées : les quantités en stock
-     des articles en tiennent compte.
-     ========================================================= */
-  const projectMaterials = [];
-  projects.filter(p => p.status !== 'termine').forEach((p, pi) => {
-    const rnd = seeded(hash(p.id + '-mat'));
-    const count = 3 + Math.floor(rnd() * 3);              // 3 à 5 matériaux par chantier
-    const used = new Set();
-    for (let i = 0; i < count; i++) {
-      let a;
-      do { a = articles[Math.floor(rnd() * articles.length)]; } while (used.has(a.id));
-      used.add(a.id);
-      const base = a.unit === 'unité' || a.unit === 'sac' ? 40 : a.unit === 'm³' ? 15 : 25;
-      projectMaterials.push({
-        id: `AFF-${p.id}-${String(i + 1).padStart(2, '0')}`,
-        projectId: p.id, articleId: a.id,
-        qty: Math.max(1, Math.round(base * (0.4 + rnd() * 1.6))),
-        date: dt.add(TODAY, -(2 + Math.floor(rnd() * 40))),
-        note: ['Sortie dépôt central', 'Livraison directe fournisseur', 'Réappro chantier', ''][Math.floor(rnd() * 4)],
-        author: p.manager
-      });
-    }
-  });
-
-  /* =========================================================
-     CATALOGUE DE TÂCHES — référentiel paramétrable
-     Sert de liste déroulante à la création d'un projet.
-     ========================================================= */
-  const taskCatalog = [
-    ['Installation de chantier', 'Préparation', 10, 'Chef d\'équipe'],
-    ['Implantation et piquetage', 'Préparation', 5, 'Géomètre'],
-    ['Démolition et curage', 'Préparation', 12, 'Conducteur d\'engin'],
-    ['Terrassement général', 'Terrassement', 20, 'Conducteur d\'engin'],
-    ['Fouilles en rigole', 'Terrassement', 10, 'Conducteur d\'engin'],
-    ['Fondations et semelles', 'Gros œuvre', 25, 'Maçon'],
-    ['Longrines et dallage', 'Gros œuvre', 18, 'Maçon'],
-    ['Ferraillage poteaux et poutres', 'Gros œuvre', 22, 'Ferrailleur'],
-    ['Coffrage et coulage des dalles', 'Gros œuvre', 30, 'Coffreur'],
-    ['Maçonnerie et cloisons', 'Gros œuvre', 28, 'Maçon'],
-    ['Charpente et couverture', 'Gros œuvre', 20, 'Charpentier'],
-    ['Étanchéité toiture-terrasse', 'Second œuvre', 12, 'Étancheur'],
-    ['Réseaux électriques', 'Second œuvre', 25, 'Électricien'],
-    ['Réseaux de plomberie', 'Second œuvre', 22, 'Plombier'],
-    ['Climatisation et ventilation', 'Second œuvre', 18, 'Technicien CVC'],
-    ['Menuiserie aluminium', 'Second œuvre', 20, 'Menuisier'],
-    ['Menuiserie bois', 'Second œuvre', 15, 'Menuisier'],
-    ['Enduits et plâtrerie', 'Finitions', 20, 'Plâtrier'],
-    ['Carrelage et faïence', 'Finitions', 25, 'Carreleur'],
-    ['Peinture intérieure', 'Finitions', 18, 'Peintre'],
-    ['Peinture et enduit de façade', 'Finitions', 15, 'Peintre'],
-    ['Aménagements extérieurs', 'Finitions', 15, 'Maçon'],
-    ['Nettoyage de fin de chantier', 'Réception', 5, 'Chef d\'équipe'],
-    ['Essais et mise en service', 'Réception', 7, 'Technicien CVC'],
-    ['Levée des réserves', 'Réception', 10, 'Chef d\'équipe'],
-    ['Réception définitive des travaux', 'Réception', 3, 'Chef de projet']
-  ].map(([name, category, days, trade], i) => ({
-    id: 'CAT-' + String(i + 1).padStart(3, '0'),
-    name, category, defaultDays: days, trade,
-    active: true
-  }));
-
+  /* Taxonomie fixe des phases de chantier (pas une donnée d'entreprise —
+     un référentiel d'affichage partagé, comme les icônes ou les labels). */
   const TASK_PHASES = ['Préparation', 'Terrassement', 'Gros œuvre', 'Second œuvre', 'Finitions', 'Réception'];
 
-  /* =========================================================
-     ATTACHEMENTS — pièces jointes par chantier
-     ========================================================= */
-  const attachments = {
-    'PRJ-001': [
-      { id: 'ATT-001', name: 'Plan de masse — niveau R+2.pdf', kind: 'plan', size: 2411000, date: dt.add(TODAY, -34), author: 'Ahmed Ben Ali' },
-      { id: 'ATT-002', name: 'Photo coffrage dalle bloc B.jpg', kind: 'photo', size: 1840000, date: dt.add(TODAY, -3), author: 'Mohamed Ali Ben Salah' },
-      { id: 'ATT-003', name: 'PV réunion de chantier n°12.pdf', kind: 'document', size: 318000, date: dt.add(TODAY, -6), author: 'Ahmed Ben Ali' }
-    ],
-    'PRJ-002': [
-      { id: 'ATT-004', name: 'Constat fissures façade sud.jpg', kind: 'photo', size: 2110000, date: dt.add(TODAY, -9), author: 'Anis Mabrouk' },
-      { id: 'ATT-005', name: 'Devis étanchéité — sous-traitant.pdf', kind: 'document', size: 154000, date: dt.add(TODAY, -15), author: 'Ahmed Ben Ali' }
-    ],
-    'PRJ-003': [
-      { id: 'ATT-006', name: 'Plan de coffrage sous-sol.pdf', kind: 'plan', size: 3620000, date: dt.add(TODAY, -21), author: 'Ahmed Ben Ali' }
-    ]
-  };
-
-  /* Devis créés depuis les fiches clients (vides au démarrage) */
-  const quotes = [];
-
-  /* ---------- Export ---------- */
-  ERP.dt = dt;
-  ERP.seeded = seeded;
-  ERP.hash = hash;
+  /* Rempli par enterApp() après connexion : user (profil), et les listes
+     (clients/projects/workers/articles/tasks/suppliers/notifications)
+     utilisées comme cache synchrone pour les pastilles de menu et
+     certains sélecteurs de formulaire. Chaque page continue par ailleurs
+     de lire ses propres données via ERP.Api à chaque rendu. */
   ERP.DB = {
-    today: TODAY, user, clients, projects, workers, articles, tasks,
-    expenses, notifications, activity, costCategories: COST_CATEGORIES,
-    taskCatalog, taskPhases: TASK_PHASES, attachments, quotes, projectMaterials, suppliers,
-    scheduledToday: scheduledWorkers.length,
-    timesheets, clientHistory
+    today: dt.iso(new Date()),
+    user: null,
+    clients: [], projects: [], workers: [], articles: [], tasks: [], suppliers: [], notifications: [],
+    taskPhases: TASK_PHASES
   };
-
-  /* =========================================================
-     PERSISTANCE LOCALSTORAGE
-     Les modifications (tâches, pointages, articles, projets…)
-     sont enregistrées pour survivre aux rechargements.
-     Idéal pour démos et tests. Réinitialiser via Paramètres.
-     ========================================================= */
-  const STORAGE_KEY = 'batipilot-db-v1';
-
-  const PERSIST_KEYS = [
-    'user', 'clients', 'projects', 'workers', 'articles', 'tasks',
-    'expenses', 'notifications', 'activity', 'taskCatalog',
-    'attachments', 'quotes', 'projectMaterials', 'suppliers'
-  ];
-
-  function serializeDB() {
-    const snapshot = {};
-    PERSIST_KEYS.forEach(k => {
-      if (ERP.DB[k] !== undefined) snapshot[k] = ERP.DB[k];
-    });
-    // Cache des pointages (objets mutables générés à la volée)
-    snapshot._timesheetCache = {};
-    Object.keys(timesheetCache).forEach(date => {
-      snapshot._timesheetCache[date] = timesheetCache[date];
-    });
-    snapshot.today = ERP.DB.today;
-    return snapshot;
-  }
-
-  function saveDB() {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(serializeDB()));
-    } catch (e) {
-      console.warn('[BâtiPilot] Impossible d\'enregistrer les données', e);
-    }
-  }
-
-  function loadDB() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return false;
-      const snapshot = JSON.parse(raw);
-      if (!snapshot || typeof snapshot !== 'object') return false;
-
-      PERSIST_KEYS.forEach(k => {
-        if (snapshot[k] !== undefined) ERP.DB[k] = snapshot[k];
-      });
-      if (snapshot.today) ERP.DB.today = snapshot.today;
-
-      // Restaurer le cache des pointages
-      if (snapshot._timesheetCache) {
-        Object.keys(timesheetCache).forEach(k => delete timesheetCache[k]);
-        Object.assign(timesheetCache, snapshot._timesheetCache);
-      }
-
-      // Recalculer le nombre d'ouvriers planifiés aujourd'hui
-      const RUNNING = ['PRJ-001', 'PRJ-002', 'PRJ-003', 'PRJ-004', 'PRJ-006', 'PRJ-007'];
-      ERP.DB.scheduledToday = (ERP.DB.workers || []).filter(w => RUNNING.includes(w.projectId)).length;
-
-      console.info('%cBâtiPilot', 'font:600 14px Barlow Semi Condensed;color:#E4651A',
-        '— données restaurées depuis localStorage');
-      return true;
-    } catch (e) {
-      console.warn('[BâtiPilot] Impossible de restaurer les données', e);
-      return false;
-    }
-  }
-
-  function clearDB() {
-    try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
-  }
-
-  // Exposer pour l'API et les paramètres
-  ERP.DB.save = saveDB;
-  ERP.DB.load = loadDB;
-  ERP.DB.clear = clearDB;
-  ERP.DB._storageKey = STORAGE_KEY;
-
-  // Restauration automatique au démarrage
-  loadDB();
 })(window.ERP);
 
 </script>
@@ -1930,439 +1251,54 @@ window.ERP = window.ERP || {};
 /* =========================================================
    BâtiPilot — Couche d'accès aux données
    ---------------------------------------------------------
-   Toutes les pages passent par ERP.Api et n'accèdent JAMAIS
-   directement à ERP.DB. Pour brancher un vrai backend :
-       ERP.Api.config.mode    = 'http';
-       ERP.Api.config.baseUrl = 'https://api.monerp.tn/v1';
-       ERP.Api.config.token   = '<jwt>';
-   Les signatures des méthodes ne changent pas.
+   Toutes les pages passent par ERP.Api, jamais directement par
+   ERP.DB. Chaque appel va sur /api/v1 → Supabase ; le jeton est
+   posé sur ERP.Api.config.token après connexion (voir js/app.js).
    ========================================================= */
 window.ERP = window.ERP || {};
 
 (function (ERP) {
   'use strict';
 
-  const DB = ERP.DB;
-  const dt = ERP.dt;
-
+  // Toutes les données transitent par Supabase via /api/v1 — aucun mode
+  // hors-ligne, aucune donnée de démonstration stockée dans le navigateur.
   const config = {
-    mode: 'mock',                 // 'mock' | 'http' — mock = localStorage
+    mode: 'http', // fixe — plus de mode démo/localStorage
     baseUrl: '/api/v1',
-    token: null,
-    latency: 90                   // simule le réseau : ressenti réaliste
+    token: null
   };
 
-  /** Force le stockage navigateur (ignore le serveur JSON). */
-  function useLocalStorage() {
-    config.mode = 'mock';
-    config.token = null;
-    try { localStorage.removeItem('batipilot-api'); } catch (_) {}
-  }
-
-  const wait = (ms) => new Promise(r => setTimeout(r, ms));
-  const clone = (v) => JSON.parse(JSON.stringify(v));
-
-  /** Persiste l'état courant dans localStorage (démo / tests). */
-  function persist() {
-    if (ERP.DB && typeof ERP.DB.save === 'function') ERP.DB.save();
-  }
-
-  /* --- Point d'entrée unique : à remplacer par fetch() côté HTTP --- */
+  /* --- Point d'entrée unique de tous les appels API --- */
   async function request(resource, { method = 'GET', params = null, body = null } = {}) {
-    if (config.mode === 'http') {
-      // baseUrl absolue (http://localhost:3001/api/v1) ou relative
-      const base = config.baseUrl.replace(/\/$/, '');
-      let url;
-      if (/^https?:\/\//i.test(base)) {
-        url = new URL(base + resource);
-      } else {
-        url = new URL(base + resource, location.origin);
-      }
-      if (params) Object.entries(params).forEach(([k, v]) => v != null && url.searchParams.set(k, v));
-      const res = await fetch(url.toString(), {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(config.token ? { Authorization: 'Bearer ' + config.token } : {})
-        },
-        body: body ? JSON.stringify(body) : undefined
-      });
-      if (!res.ok) {
-        let detail = res.statusText;
-        try { const j = await res.json(); if (j && j.error) detail = j.error; } catch (_) {}
-        throw new Error(`${res.status} ${detail}`);
-      }
-      if (res.status === 204) return null;
-      const ct = res.headers.get('content-type') || '';
-      return ct.includes('json') ? res.json() : null;
+    const base = config.baseUrl.replace(/\/$/, '');
+    const url = new URL(base + resource, location.origin);
+    if (params) Object.entries(params).forEach(([k, v]) => v != null && url.searchParams.set(k, v));
+    const res = await fetch(url.toString(), {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(config.token ? { Authorization: 'Bearer ' + config.token } : {})
+      },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try { const j = await res.json(); if (j && j.error) detail = j.error; } catch (_) {}
+      throw new Error(`${res.status} ${detail}`);
     }
-    await wait(config.latency);
-    return mock(resource, method, params, body);
+    if (res.status === 204) return null;
+    const ct = res.headers.get('content-type') || '';
+    return ct.includes('json') ? res.json() : null;
   }
 
   /* =======================================================
-     Sélecteurs / calculs métier
-     ======================================================= */
-  const byId = (arr, id) => arr.find(x => x.id === id) || null;
-
-  const isLate = (t) => t.status !== 'termine' && t.due < DB.today;
-
-  function decorateProject(p) {
-    const client = byId(DB.clients, p.clientId);
-    const team = DB.workers.filter(w => w.projectId === p.id);
-    const ts = DB.timesheets(DB.today).filter(t => t.projectId === p.id);
-    const present = ts.filter(t => t.status !== 'absent');
-    const pTasks = DB.tasks.filter(t => t.projectId === p.id);
-    const late = p.phases.filter(ph => ph.progress < 100 && ph.end < DB.today);
-    const daysLate = late.length ? Math.max(...late.map(ph => dt.diff(ph.end, DB.today))) : 0;
-    return Object.assign({}, p, {
-      clientName: client ? client.company : '—',
-      clientContact: client ? client.contact : '—',
-      teamSize: team.length,
-      presentToday: present.length,
-      hoursToday: present.reduce((s, t) => s + t.hours, 0),
-      remaining: p.budget - p.spent,
-      burn: p.budget ? Math.round(p.spent / p.budget * 100) : 0,
-      tasksTotal: pTasks.length,
-      tasksLate: pTasks.filter(isLate).length,
-      tasksDone: pTasks.filter(t => t.status === 'termine').length,
-      daysLate,
-      latePhases: late.map(ph => ph.name),
-      materialsCount: DB.projectMaterials.filter(m => m.projectId === p.id).length,
-      materialsCost: DB.projectMaterials.filter(m => m.projectId === p.id)
-        .reduce((s, m) => { const a = byId(DB.articles, m.articleId); return s + (a ? m.qty * a.price : 0); }, 0)
-    });
-  }
-
-  /** Une affectation enrichie des informations de l'article (libellé, unité, prix, stock). */
-  function decorateMaterial(m) {
-    const a = byId(DB.articles, m.articleId);
-    const p = byId(DB.projects, m.projectId);
-    return Object.assign({}, m, {
-      name: a ? a.name : '—', ref: a ? a.ref : '—', unit: a ? a.unit : '',
-      category: a ? a.category : '—', price: a ? a.price : 0,
-      total: a ? m.qty * a.price : 0,
-      stock: a ? a.stock : 0, min: a ? a.min : 0,
-      stockStatus: a ? a.stockStatus : 'ok',
-      supplier: a ? a.supplier : '—',
-      projectName: p ? p.name : '—'
-    });
-  }
-
-  /** Mouvement de stock : met à jour la quantité et recalcule le statut. */
-  function moveStock(article, delta) {
-    article.stock = Math.max(0, article.stock + delta);
-    article.stockStatus = article.stock === 0 ? 'rupture'
-      : (article.stock < article.min ? 'faible' : 'ok');
-    if (delta > 0) article.lastEntry = DB.today;
-  }
-
-  /** Impute (ou décharge) un montant sur le poste Matériaux du chantier. */
-  function chargeProject(projectId, amount) {
-    const p = byId(DB.projects, projectId);
-    if (!p) return;
-    p.spent = Math.max(0, Math.round(p.spent + amount));
-    const key = `DEP-${projectId}-materiaux`;
-    const line = DB.expenses.find(e => e.id === key);
-    if (line) line.amount = Math.max(0, Math.round(line.amount + amount));
-    else DB.expenses.push({
-      id: key, projectId, category: 'materiaux', label: 'Matériaux',
-      amount: Math.max(0, Math.round(amount))
-    });
-  }
-
-  /** Un fournisseur enrichi de son activité : références, alertes, achats. */
-  function decorateSupplier(s) {
-    const arts = DB.articles.filter(a => a.supplierId === s.id);
-    const moves = DB.projectMaterials.filter(m => {
-      const a = byId(DB.articles, m.articleId);
-      return a && a.supplierId === s.id;
-    });
-    const purchases = moves.reduce((sum, m) => {
-      const a = byId(DB.articles, m.articleId);
-      return sum + (a ? m.qty * a.price : 0);
-    }, 0);
-    const lastMove = moves.length ? moves.slice().sort((x, y) => y.date.localeCompare(x.date))[0].date : null;
-    return Object.assign({}, s, {
-      articleCount: arts.length,
-      featuredCount: s.featured.length,
-      alerts: arts.filter(a => a.stockStatus !== 'ok').length,
-      ruptures: arts.filter(a => a.stockStatus === 'rupture').length,
-      stockValue: arts.reduce((sum, a) => sum + a.stock * a.price, 0),
-      purchases,
-      lastMove,
-      projectCount: new Set(moves.map(m => m.projectId)).size
-    });
-  }
-
-  function decorateClient(c) {
-    const ps = DB.projects.filter(p => p.clientId === c.id);
-    return Object.assign({}, c, {
-      projectCount: ps.length,
-      totalAmount: ps.reduce((s, p) => s + p.budget, 0),
-      openCount: ps.filter(p => p.status !== 'termine').length,
-      lastProject: ps.length ? ps.slice().sort((a, b) => b.start.localeCompare(a.start))[0].name : '—'
-    });
-  }
-
-  function decorateWorker(w) {
-    const p = byId(DB.projects, w.projectId);
-    const entry = DB.timesheets(DB.today).find(t => t.workerId === w.id) || null;
-    // 30 derniers jours ouvrés simulés pour la fiche ouvrier
-    let month = 0;
-    for (let i = 0; i < 30; i++) {
-      const d = dt.add(DB.today, -i);
-      if (dt.isWeekend(d)) continue;
-      const e = DB.timesheets(d).find(t => t.workerId === w.id);
-      if (e) month += e.hours;
-    }
-    return Object.assign({}, w, {
-      projectName: p ? p.name : 'Non affecté',
-      todayStatus: entry ? entry.status : 'non_planifie',
-      todayEntry: entry,
-      monthHours: Math.round(month),
-      monthCost: Math.round(month * w.rate)
-    });
-  }
-
-  /* =======================================================
-     Adaptateur « mock »
-     ======================================================= */
-  function mock(resource, method, params, body) {
-    const p = params || {};
-
-    /* ---- Tableau de bord ---- */
-    if (resource === '/dashboard/kpis') {
-      const active = DB.projects.filter(x => x.status !== 'termine');
-      const done = DB.projects.filter(x => x.status === 'termine');
-      const ts = DB.timesheets(DB.today);
-      const present = ts.filter(t => t.status !== 'absent');
-      const budget = active.reduce((s, x) => s + x.budget, 0);
-      const spent = active.reduce((s, x) => s + x.spent, 0);
-      return {
-        activeProjects: active.length,
-        doneProjects: done.length,
-        scheduled: ts.length,
-        present: present.length,
-        absent: ts.length - present.length,
-        hoursToday: present.reduce((s, t) => s + t.hours, 0),
-        lateTasks: DB.tasks.filter(isLate).length,
-        lateProjects: active.filter(x => x.status === 'en_retard').length,
-        budget, spent, remaining: budget - spent,
-        burn: Math.round(spent / budget * 100)
-      };
-    }
-    if (resource === '/dashboard/activity') return clone(DB.activity);
-
-    /* ---- Projets ---- */
-    if (resource === '/projects') {
-      let list = DB.projects.map(decorateProject);
-      if (p.status && p.status !== 'tous') list = list.filter(x => x.status === p.status);
-      if (p.q) {
-        const q = p.q.toLowerCase();
-        list = list.filter(x => (x.name + x.clientName + x.city + x.address + x.ref).toLowerCase().includes(q));
-      }
-      return list;
-    }
-    if (resource.startsWith('/projects/')) {
-      const found = byId(DB.projects, resource.split('/')[2]);
-      return found ? decorateProject(found) : null;
-    }
-
-    /* ---- Clients ---- */
-    if (resource === '/clients') {
-      let list = DB.clients.map(decorateClient);
-      if (p.status && p.status !== 'tous') list = list.filter(x => x.status === p.status);
-      if (p.q) {
-        const q = p.q.toLowerCase();
-        list = list.filter(x => (x.company + x.contact + x.city + x.email).toLowerCase().includes(q));
-      }
-      return list;
-    }
-    if (resource.startsWith('/clients/')) {
-      const id = resource.split('/')[2];
-      const c = byId(DB.clients, id);
-      if (!c) return null;
-      return Object.assign(decorateClient(c), {
-        projects: DB.projects.filter(x => x.clientId === id).map(decorateProject),
-        quotes: DB.quotes.filter(q => q.clientId === id),
-        history: DB.quotes.filter(q => q.clientId === id).map(q => ({
-          type: 'Devis', tone: q.status === 'accepte' ? 'ok' : 'info', ref: q.id,
-          date: q.date, amount: q.total, quoteId: q.id,
-          note: q.title + (q.projectId ? ' — converti en projet' : '')
-        })).concat(DB.clientHistory(id))
-          .sort((a, b) => b.date.localeCompare(a.date))
-      });
-    }
-
-    /* ---- Ouvriers ---- */
-    if (resource === '/workers') {
-      let list = DB.workers.map(decorateWorker);
-      if (p.projectId && p.projectId !== 'tous') list = list.filter(x => x.projectId === p.projectId);
-      if (p.trade && p.trade !== 'tous') list = list.filter(x => x.trade === p.trade);
-      if (p.q) {
-        const q = p.q.toLowerCase();
-        list = list.filter(x => (x.name + x.trade + x.matricule).toLowerCase().includes(q));
-      }
-      return list;
-    }
-    if (resource.startsWith('/workers/')) {
-      const w = byId(DB.workers, resource.split('/')[2]);
-      return w ? decorateWorker(w) : null;
-    }
-
-    /* ---- Pointage ---- */
-    if (resource === '/timesheets') {
-      const date = p.date || DB.today;
-      let rows = DB.timesheets(date).map(r => Object.assign({}, r, {
-        projectName: (byId(DB.projects, r.projectId) || {}).name || '—'
-      }));
-      if (p.projectId && p.projectId !== 'tous') rows = rows.filter(r => r.projectId === p.projectId);
-      if (p.trade && p.trade !== 'tous') rows = rows.filter(r => r.trade === p.trade);
-      if (p.status && p.status !== 'tous') rows = rows.filter(r => r.status === p.status);
-      if (p.q) rows = rows.filter(r => r.worker.toLowerCase().includes(p.q.toLowerCase()));
-      return rows;
-    }
-    if (resource === '/timesheets/summary') {
-      const rows = DB.timesheets(p.date || DB.today);
-      const present = rows.filter(r => r.status !== 'absent');
-      return {
-        date: p.date || DB.today,
-        scheduled: rows.length,
-        present: present.length,
-        absent: rows.filter(r => r.status === 'absent').length,
-        late: rows.filter(r => r.status === 'retard').length,
-        hours: present.reduce((s, r) => s + r.hours, 0),
-        cost: Math.round(present.reduce((s, r) => {
-          const w = byId(DB.workers, r.workerId);
-          return s + r.hours * (w ? w.rate : 15);
-        }, 0))
-      };
-    }
-    if (resource === '/timesheets' && method === 'POST') return body;
-
-    /* ---- Articles ---- */
-    if (resource === '/articles') {
-      let list = clone(DB.articles);
-      if (p.category && p.category !== 'tous') list = list.filter(a => a.category === p.category);
-      if (p.stockStatus && p.stockStatus !== 'tous') list = list.filter(a => a.stockStatus === p.stockStatus);
-      if (p.q) {
-        const q = p.q.toLowerCase();
-        list = list.filter(a => (a.name + a.ref + a.supplier + a.category).toLowerCase().includes(q));
-      }
-      return list;
-    }
-    if (resource.startsWith('/articles/')) return clone(byId(DB.articles, resource.split('/')[2]));
-
-    /* ---- Tâches ---- */
-    if (resource === '/tasks') {
-      let list = DB.tasks.map(t => Object.assign({}, t, {
-        projectName: (byId(DB.projects, t.projectId) || {}).name || '—',
-        late: isLate(t)
-      }));
-      if (p.projectId && p.projectId !== 'tous') list = list.filter(t => t.projectId === p.projectId);
-      if (p.status && p.status !== 'tous') list = list.filter(t => t.status === p.status);
-      if (p.priority && p.priority !== 'tous') list = list.filter(t => t.priority === p.priority);
-      if (p.q) list = list.filter(t => (t.title + t.assignee).toLowerCase().includes(p.q.toLowerCase()));
-      return list;
-    }
-
-    /* ---- Budget ---- */
-    if (resource === '/budget/summary') {
-      const active = DB.projects.filter(x => x.status !== 'termine');
-      const budget = active.reduce((s, x) => s + x.budget, 0);
-      const spent = active.reduce((s, x) => s + x.spent, 0);
-      return { budget, spent, remaining: budget - spent, burn: Math.round(spent / budget * 100) };
-    }
-    if (resource === '/budget/categories') {
-      return DB.costCategories.map(c => ({
-        key: c.key, label: c.label, color: c.color,
-        amount: DB.expenses.filter(e => e.category === c.key && (!p.projectId || p.projectId === 'tous' || e.projectId === p.projectId))
-          .reduce((s, e) => s + e.amount, 0)
-      })).sort((a, b) => b.amount - a.amount);
-    }
-    if (resource === '/budget/projects') {
-      return DB.projects.filter(x => x.status !== 'termine').map(decorateProject);
-    }
-
-    /* ---- Planning ---- */
-    if (resource === '/planning') {
-      const list = DB.projects.filter(x => x.status !== 'termine');
-      if (p.projectId && p.projectId !== 'tous') {
-        const pr = byId(DB.projects, p.projectId);
-        if (!pr) return [];
-        return pr.phases.map((ph, i) => ({
-          id: pr.id + '-P' + i, label: ph.name, sub: ph.lead,
-          start: ph.start, end: ph.end, progress: ph.progress,
-          status: ph.progress === 100 ? 'termine' : (ph.end < DB.today ? 'en_retard' : (ph.progress > 0 ? 'en_cours' : 'en_preparation')),
-          projectId: pr.id
-        }));
-      }
-      return list.map(pr => ({
-        id: pr.id, label: pr.name, sub: (byId(DB.clients, pr.clientId) || {}).company || '',
-        start: pr.start, end: pr.end, progress: pr.progress, status: pr.status, projectId: pr.id
-      }));
-    }
-
-    /* ---- Rapports ---- */
-    if (resource === '/reports/attendance') {
-      const days = [];
-      for (let i = 13; i >= 0; i--) {
-        const d = dt.add(DB.today, -i);
-        if (dt.isWeekend(d)) continue;
-        const rows = DB.timesheets(d);
-        const present = rows.filter(r => r.status !== 'absent');
-        days.push({
-          date: d,
-          present: present.length,
-          absent: rows.length - present.length,
-          hours: Math.round(present.reduce((s, r) => s + r.hours, 0)),
-          planned: rows.length * 8
-        });
-      }
-      return days;
-    }
-    if (resource === '/reports/trades') {
-      const rows = DB.timesheets(DB.today).filter(r => r.status !== 'absent');
-      const map = {};
-      rows.forEach(r => { map[r.trade] = (map[r.trade] || 0) + r.hours; });
-      return Object.entries(map).map(([label, value]) => ({ label, value: Math.round(value) }))
-        .sort((a, b) => b.value - a.value);
-    }
-
-    /* ---- Notifications ---- */
-    if (resource === '/notifications') return clone(DB.notifications);
-
-    /* ---- Recherche globale ---- */
-    if (resource === '/search') {
-      const q = (p.q || '').toLowerCase().trim();
-      if (q.length < 2) return [];
-      const out = [];
-      DB.projects.filter(x => (x.name + x.ref).toLowerCase().includes(q)).slice(0, 4)
-        .forEach(x => out.push({ group: 'Projets', label: x.name, sub: x.ref + ' · ' + x.city, href: '#/projets/' + x.id, icon: 'building' }));
-      DB.clients.filter(x => (x.company + x.contact).toLowerCase().includes(q)).slice(0, 4)
-        .forEach(x => out.push({ group: 'Clients', label: x.company, sub: x.contact, href: '#/clients/' + x.id, icon: 'users' }));
-      DB.workers.filter(x => x.name.toLowerCase().includes(q)).slice(0, 4)
-        .forEach(x => out.push({ group: 'Ouvriers', label: x.name, sub: x.trade, href: '#/pointage/' + x.id, icon: 'hardhat' }));
-      DB.articles.filter(x => (x.name + x.ref).toLowerCase().includes(q)).slice(0, 4)
-        .forEach(x => out.push({ group: 'Articles', label: x.name, sub: x.ref + ' · ' + x.category, href: '#/articles/' + x.id, icon: 'package' }));
-      DB.suppliers.filter(x => (x.company + x.contact + x.specialty + x.city).toLowerCase().includes(q)).slice(0, 4)
-        .forEach(x => out.push({ group: 'Fournisseurs', label: x.company, sub: x.specialty + ' · ' + x.city, href: '#/fournisseurs/' + x.id, icon: 'truck' }));
-      DB.tasks.filter(x => x.title.toLowerCase().includes(q)).slice(0, 3)
-        .forEach(x => out.push({ group: 'Tâches', label: x.title, sub: x.assignee, href: '#/taches', icon: 'check' }));
-      return out;
-    }
-
-    throw new Error('Ressource inconnue : ' + resource);
-  }
-
-  /* =======================================================
-     API publique
+     API publique — chaque méthode appelle directement l'API HTTP ;
+     toute la logique métier (calculs, décoration, mouvements de stock)
+     vit côté serveur (voir vercel/api/index.js).
      ======================================================= */
   ERP.Api = {
     config,
     request,
-    useLocalStorage,
 
     dashboard: {
       kpis: () => request('/dashboard/kpis'),
@@ -2371,464 +1307,86 @@ window.ERP = window.ERP || {};
     projects: {
       list: (params) => request('/projects', { params }),
       get: (id) => request('/projects/' + id),
-      create: (p) => {
-        if (config.mode === 'http') return request('/projects', { method: 'POST', body: p });
-        const n = ERP.DB.projects.length + 1;
-        const picked = p.tasks || [];
-        const item = Object.assign({
-          id: 'PRJ-' + String(n).padStart(3, '0'),
-          ref: 'CHT-' + ERP.DB.today.slice(0, 4) + '-' + String(n).padStart(3, '0'),
-          spent: 0, progress: 0, status: 'en_preparation'
-        }, p);
-        delete item.tasks;
-
-        // Chaque tâche choisie devient une tâche du chantier ET un lot du planning
-        item.phases = picked.map((t, i) => {
-          const taskId = 'TSK-' + String(ERP.DB.tasks.length + i + 1).padStart(3, '0');
-          return { taskId, name: t.name, start: t.start, end: t.end, progress: 0, lead: t.assignee || item.manager };
-        });
-        ERP.DB.projects.unshift(item);
-        picked.forEach((t, i) => {
-          ERP.DB.tasks.push({
-            id: item.phases[i].taskId, title: t.name, projectId: item.id,
-            assignee: t.assignee || item.manager, priority: t.priority || 'moyenne',
-            start: t.start, due: t.end, progress: 0, status: 'a_faire', createdAt: ERP.DB.today
-          });
-        });
-        persist();
-        return Promise.resolve(item);
-      },
-      update: (id, patch) => {
-        if (config.mode === 'http') return request('/projects/' + id, { method: 'PATCH', body: patch });
-        const p = ERP.DB.projects.find(x => x.id === id);
-        if (p) Object.assign(p, patch);
-        persist();
-        return Promise.resolve(p);
-      },
-      remove: (id) => {
-        if (config.mode === 'http') return request('/projects/' + id, { method: 'DELETE' });
-        const i = ERP.DB.projects.findIndex(x => x.id === id);
-        if (i > -1) ERP.DB.projects.splice(i, 1);
-        ERP.DB.tasks = ERP.DB.tasks.filter(t => t.projectId !== id);
-        ERP.DB.projectMaterials = ERP.DB.projectMaterials.filter(m => m.projectId !== id);
-        persist();
-        return Promise.resolve(true);
-      }
+      create: (p) => request('/projects', { method: 'POST', body: p }),
+      update: (id, patch) => request('/projects/' + id, { method: 'PATCH', body: patch }),
+      remove: (id) => request('/projects/' + id, { method: 'DELETE' })
     },
 
     /* Matériaux affectés à un chantier — le stock suit chaque mouvement */
     materials: {
-      list: (params = {}) => {
-        if (config.mode === 'http') return request('/materials', { params });
-        let list = ERP.DB.projectMaterials.slice();
-        if (params.projectId && params.projectId !== 'tous') list = list.filter(m => m.projectId === params.projectId);
-        if (params.articleId) list = list.filter(m => m.articleId === params.articleId);
-        return Promise.resolve(list.map(decorateMaterial)
-          .sort((a, b) => b.date.localeCompare(a.date)));
-      },
-      create: (m) => {
-        if (config.mode === 'http') return request('/materials', { method: 'POST', body: m });
-        const a = byId(ERP.DB.articles, m.articleId);
-        if (!a) return Promise.reject(new Error('Article introuvable'));
-        if (m.qty > a.stock) return Promise.reject(new Error('stock_insuffisant'));
-        const item = Object.assign({
-          id: 'AFF-' + Date.now().toString(36).toUpperCase(),
-          date: ERP.DB.today, author: ERP.DB.user.name, note: ''
-        }, m);
-        ERP.DB.projectMaterials.push(item);
-        moveStock(a, -item.qty);
-        chargeProject(item.projectId, item.qty * a.price);
-        persist();
-        return Promise.resolve(decorateMaterial(item));
-      },
-      update: (id, patch) => {
-        if (config.mode === 'http') return request('/materials/' + id, { method: 'PATCH', body: patch });
-        const item = ERP.DB.projectMaterials.find(x => x.id === id);
-        if (!item) return Promise.resolve(null);
-        const a = byId(ERP.DB.articles, item.articleId);
-        if (patch.qty != null && a) {
-          const delta = patch.qty - item.qty;
-          if (delta > a.stock) return Promise.reject(new Error('stock_insuffisant'));
-          moveStock(a, -delta);
-          chargeProject(item.projectId, delta * a.price);
-        }
-        Object.assign(item, patch);
-        persist();
-        return Promise.resolve(decorateMaterial(item));
-      },
-      remove: (id) => {
-        if (config.mode === 'http') return request('/materials/' + id, { method: 'DELETE' });
-        const i = ERP.DB.projectMaterials.findIndex(x => x.id === id);
-        if (i > -1) {
-          const item = ERP.DB.projectMaterials[i];
-          const a = byId(ERP.DB.articles, item.articleId);
-          if (a) { moveStock(a, item.qty); chargeProject(item.projectId, -item.qty * a.price); }
-          ERP.DB.projectMaterials.splice(i, 1);
-        }
-        persist();
-        return Promise.resolve(true);
-      }
+      list: (params = {}) => request('/materials', { params }),
+      create: (m) => request('/materials', { method: 'POST', body: m }),
+      update: (id, patch) => request('/materials/' + id, { method: 'PATCH', body: patch }),
+      remove: (id) => request('/materials/' + id, { method: 'DELETE' })
     },
 
     /* Fournisseurs de matériaux */
     suppliers: {
-      list: (params = {}) => {
-        if (config.mode === 'http') return request('/suppliers', { params });
-        let list = ERP.DB.suppliers.map(decorateSupplier);
-        if (params.status && params.status !== 'tous') list = list.filter(s => s.status === params.status);
-        if (params.city && params.city !== 'tous') list = list.filter(s => s.city === params.city);
-        if (params.q) {
-          const q = params.q.toLowerCase();
-          list = list.filter(s => (s.company + s.contact + s.city + s.specialty).toLowerCase().includes(q));
-        }
-        return Promise.resolve(list);
-      },
-      get: (id) => {
-        if (config.mode === 'http') return request('/suppliers/' + id);
-        const s = byId(ERP.DB.suppliers, id);
-        if (!s) return Promise.resolve(null);
-        return Promise.resolve(Object.assign(decorateSupplier(s), {
-          articles: DB.articles.filter(a => a.supplierId === id)
-            .map(a => Object.assign({}, a, { isFeatured: s.featured.includes(a.id) }))
-            .sort((a, b) => (b.isFeatured - a.isFeatured) || a.name.localeCompare(b.name)),
-          deliveries: DB.projectMaterials
-            .filter(m => { const a = byId(DB.articles, m.articleId); return a && a.supplierId === id; })
-            .map(m => {
-              const a = byId(DB.articles, m.articleId), p = byId(DB.projects, m.projectId);
-              return {
-                id: m.id, date: m.date, qty: m.qty, unit: a.unit, article: a.name,
-                amount: m.qty * a.price, projectName: p ? p.name : '—', projectId: m.projectId
-              };
-            }).sort((x, y) => y.date.localeCompare(x.date))
-        }));
-      },
-      create: (s) => {
-        if (config.mode === 'http') return request('/suppliers', { method: 'POST', body: s });
-        const item = Object.assign({
-          id: 'FRN-' + String(ERP.DB.suppliers.length + 1).padStart(3, '0'),
-          since: ERP.DB.today, status: 'actif', featured: [],
-          rating: 4, leadDays: 3, taxId: '', payment: '30 jours fin de mois', note: ''
-        }, s);
-        ERP.DB.suppliers.unshift(item);
-        persist();
-        return Promise.resolve(item);
-      },
-      update: (id, patch) => {
-        if (config.mode === 'http') return request('/suppliers/' + id, { method: 'PATCH', body: patch });
-        const s = byId(ERP.DB.suppliers, id);
-        if (s) {
-          const oldName = s.company;
-          Object.assign(s, patch);
-          // Les articles portent le nom du fournisseur : on le garde aligné
-          if (patch.company && patch.company !== oldName) {
-            DB.articles.filter(a => a.supplierId === id).forEach(a => { a.supplier = patch.company; });
-          }
-        }
-        persist();
-        return Promise.resolve(s);
-      },
-      remove: (id) => {
-        if (config.mode === 'http') return request('/suppliers/' + id, { method: 'DELETE' });
-        const i = ERP.DB.suppliers.findIndex(x => x.id === id);
-        if (i > -1) ERP.DB.suppliers.splice(i, 1);
-        persist();
-        return Promise.resolve(true);
-      },
+      list: (params = {}) => request('/suppliers', { params }),
+      get: (id) => request('/suppliers/' + id),
+      create: (s) => request('/suppliers', { method: 'POST', body: s }),
+      update: (id, patch) => request('/suppliers/' + id, { method: 'PATCH', body: patch }),
+      remove: (id) => request('/suppliers/' + id, { method: 'DELETE' }),
       /** Épingle ou retire un matériau de la sélection « à la une ». */
-      toggleFeatured: (id, articleId) => {
-        if (config.mode === 'http') return request('/suppliers/' + id + '/featured/' + articleId, { method: 'POST' });
-        const s = byId(ERP.DB.suppliers, id);
-        if (!s) return Promise.resolve(null);
-        const i = s.featured.indexOf(articleId);
-        if (i > -1) s.featured.splice(i, 1); else s.featured.push(articleId);
-        persist();
-        return Promise.resolve({ featured: i === -1, count: s.featured.length });
-      }
+      toggleFeatured: (id, articleId) => request('/suppliers/' + id + '/featured/' + articleId, { method: 'POST' })
     },
 
     /* Référentiel de tâches, paramétrable depuis le module Tâches */
     taskCatalog: {
-      list: () => config.mode === 'http' ? request('/task-catalog') : Promise.resolve(ERP.DB.taskCatalog.slice()),
-      create: (c) => {
-        if (config.mode === 'http') return request('/task-catalog', { method: 'POST', body: c });
-        const item = Object.assign({
-          id: 'CAT-' + String(ERP.DB.taskCatalog.length + 1).padStart(3, '0'),
-          active: true, defaultDays: 10
-        }, c);
-        ERP.DB.taskCatalog.push(item);
-        persist();
-        return Promise.resolve(item);
-      },
-      update: (id, patch) => {
-        if (config.mode === 'http') return request('/task-catalog/' + id, { method: 'PATCH', body: patch });
-        const c = ERP.DB.taskCatalog.find(x => x.id === id);
-        if (c) Object.assign(c, patch);
-        persist();
-        return Promise.resolve(c);
-      },
-      remove: (id) => {
-        if (config.mode === 'http') return request('/task-catalog/' + id, { method: 'DELETE' });
-        const i = ERP.DB.taskCatalog.findIndex(x => x.id === id);
-        if (i > -1) ERP.DB.taskCatalog.splice(i, 1);
-        persist();
-        return Promise.resolve(true);
-      }
+      list: () => request('/task-catalog'),
+      create: (c) => request('/task-catalog', { method: 'POST', body: c }),
+      update: (id, patch) => request('/task-catalog/' + id, { method: 'PATCH', body: patch }),
+      remove: (id) => request('/task-catalog/' + id, { method: 'DELETE' })
     },
 
     /* Pièces jointes d'un chantier (plans, photos, PV) */
     attachments: {
-      list: (projectId) => {
-        if (config.mode === 'http') return request('/attachments/' + projectId);
-        return Promise.resolve((ERP.DB.attachments[projectId] || []).slice()
-          .sort((a, b) => b.date.localeCompare(a.date)));
-      },
-      create: (projectId, file) => {
-        if (config.mode === 'http') return request('/attachments/' + projectId, { method: 'POST', body: file });
-        const list = ERP.DB.attachments[projectId] || (ERP.DB.attachments[projectId] = []);
-        const item = Object.assign({
-          id: 'ATT-' + Date.now().toString(36).toUpperCase(),
-          date: ERP.DB.today, author: ERP.DB.user.name, kind: 'document'
-        }, file);
-        list.push(item);
-        persist();
-        return Promise.resolve(item);
-      },
-      remove: (projectId, id) => {
-        if (config.mode === 'http') return request('/attachments/' + projectId + '/' + id, { method: 'DELETE' });
-        const list = ERP.DB.attachments[projectId] || [];
-        const i = list.findIndex(x => x.id === id);
-        if (i > -1) list.splice(i, 1);
-        persist();
-        return Promise.resolve(true);
-      }
+      list: (projectId) => request('/attachments/' + projectId),
+      create: (projectId, file) => request('/attachments/' + projectId, { method: 'POST', body: file }),
+      remove: (projectId, id) => request('/attachments/' + projectId + '/' + id, { method: 'DELETE' })
     },
 
     /* Devis établis depuis une fiche client */
     quotes: {
-      list: (clientId) => {
-        if (config.mode === 'http') return request('/quotes', { params: clientId ? { clientId } : null });
-        return Promise.resolve(ERP.DB.quotes.filter(q => !clientId || q.clientId === clientId));
-      },
-      get: (id) => {
-        if (config.mode === 'http') return request('/quotes/' + id);
-        return Promise.resolve(ERP.DB.quotes.find(q => q.id === id));
-      },
-      create: (q) => {
-        if (config.mode === 'http') return request('/quotes', { method: 'POST', body: q });
-        const year = ERP.DB.today.slice(0, 4);
-        const n = ERP.DB.quotes.length + 1;
-        const item = Object.assign({
-          id: 'DEV-' + year + '-' + String(n).padStart(3, '0'),
-          date: ERP.DB.today, status: 'en_attente', projectId: null
-        }, q);
-        item.total = (item.lines || []).reduce((s, l) => s + l.qty * l.price, 0);
-        ERP.DB.quotes.unshift(item);
-        persist();
-        return Promise.resolve(item);
-      },
-      update: (id, patch) => {
-        if (config.mode === 'http') return request('/quotes/' + id, { method: 'PATCH', body: patch });
-        const q = ERP.DB.quotes.find(x => x.id === id);
-        if (q) Object.assign(q, patch);
-        persist();
-        return Promise.resolve(q);
-      },
-      remove: (id) => {
-        if (config.mode === 'http') return request('/quotes/' + id, { method: 'DELETE' });
-        const i = ERP.DB.quotes.findIndex(x => x.id === id);
-        if (i > -1) ERP.DB.quotes.splice(i, 1);
-        persist();
-        return Promise.resolve(true);
-      }
+      list: (clientId) => request('/quotes', { params: clientId ? { clientId } : null }),
+      get: (id) => request('/quotes/' + id),
+      create: (q) => request('/quotes', { method: 'POST', body: q }),
+      update: (id, patch) => request('/quotes/' + id, { method: 'PATCH', body: patch }),
+      remove: (id) => request('/quotes/' + id, { method: 'DELETE' })
     },
     clients: {
       list: (params) => request('/clients', { params }),
       get: (id) => request('/clients/' + id),
-      create: (c) => {
-        if (config.mode === 'http') return request('/clients', { method: 'POST', body: c });
-        const item = Object.assign({
-          id: 'CLI-' + String(ERP.DB.clients.length + 1).padStart(3, '0'),
-          since: ERP.DB.today, status: 'actif', address: '', phone: '', email: ''
-        }, c);
-        ERP.DB.clients.unshift(item);
-        persist();
-        return Promise.resolve(item);
-      },
-      update: (id, patch) => {
-        if (config.mode === 'http') return request('/clients/' + id, { method: 'PATCH', body: patch });
-        const c = ERP.DB.clients.find(x => x.id === id);
-        if (c) Object.assign(c, patch);
-        persist();
-        return Promise.resolve(c);
-      },
-      remove: (id) => {
-        if (config.mode === 'http') return request('/clients/' + id, { method: 'DELETE' });
-        const i = ERP.DB.clients.findIndex(x => x.id === id);
-        if (i > -1) ERP.DB.clients.splice(i, 1);
-        persist();
-        return Promise.resolve(true);
-      }
+      create: (c) => request('/clients', { method: 'POST', body: c }),
+      update: (id, patch) => request('/clients/' + id, { method: 'PATCH', body: patch }),
+      remove: (id) => request('/clients/' + id, { method: 'DELETE' })
     },
     workers: {
       list: (params) => request('/workers', { params }),
       get: (id) => request('/workers/' + id),
-      create: (w) => {
-        if (config.mode === 'http') return request('/workers', { method: 'POST', body: w });
-        const item = Object.assign({
-          id: 'OUV-' + String(ERP.DB.workers.length + 1).padStart(3, '0'),
-          trade: 'Maçon', rate: 15, projectId: null, phone: '', status: 'actif'
-        }, w);
-        ERP.DB.workers.unshift(item);
-        persist();
-        return Promise.resolve(item);
-      },
-      update: (id, patch) => {
-        if (config.mode === 'http') return request('/workers/' + id, { method: 'PATCH', body: patch });
-        const w = ERP.DB.workers.find(x => x.id === id);
-        if (w) Object.assign(w, patch);
-        persist();
-        return Promise.resolve(w);
-      },
-      remove: (id) => {
-        if (config.mode === 'http') return request('/workers/' + id, { method: 'DELETE' });
-        const i = ERP.DB.workers.findIndex(x => x.id === id);
-        if (i > -1) ERP.DB.workers.splice(i, 1);
-        persist();
-        return Promise.resolve(true);
-      }
+      create: (w) => request('/workers', { method: 'POST', body: w }),
+      update: (id, patch) => request('/workers/' + id, { method: 'PATCH', body: patch }),
+      remove: (id) => request('/workers/' + id, { method: 'DELETE' })
     },
     timesheets: {
       list: (params) => request('/timesheets', { params }),
       summary: (params) => request('/timesheets/summary', { params }),
-      create: (entry) => {
-        if (config.mode === 'http') return request('/timesheets', { method: 'POST', body: entry });
-        // Écriture simulée : la ligne est injectée dans le jeu de données en mémoire.
-        const rows = ERP.DB.timesheets(entry.date);
-        const worker = ERP.DB.workers.find(w => w.id === entry.workerId);
-        const hours = Math.max(0, (entry.out - entry.in - entry.breakMin) / 60);
-        const existing = rows.find(r => r.workerId === entry.workerId);
-        const row = {
-          id: 'PTG-' + entry.date + '-' + entry.workerId, date: entry.date,
-          workerId: entry.workerId, worker: worker ? worker.name : '—',
-          trade: worker ? worker.trade : '—', projectId: entry.projectId,
-          in: entry.in, out: entry.out, breakMin: entry.breakMin, hours,
-          status: entry.status || (entry.in > 435 ? 'retard' : 'present'),
-          note: entry.note || ''
-        };
-        if (existing) Object.assign(existing, row); else rows.push(row);
-        persist();
-        return Promise.resolve(row);
-      },
-      update: (id, patch) => {
-        if (config.mode === 'http') return request('/timesheets/' + id, { method: 'PATCH', body: patch });
-        // Chercher dans le cache des pointages
-        const cache = {}; // fallback: scan via timesheets of recent days
-        for (let i = 0; i < 30; i++) {
-          const d = ERP.dt.add(ERP.DB.today, -i);
-          const rows = ERP.DB.timesheets(d);
-          const row = rows.find(r => r.id === id);
-          if (row) {
-            Object.assign(row, patch);
-            if (patch.in != null || patch.out != null || patch.breakMin != null) {
-              row.hours = Math.max(0, (row.out - row.in - (row.breakMin || 0)) / 60);
-            }
-            persist();
-            return Promise.resolve(row);
-          }
-        }
-        return Promise.resolve(null);
-      },
-      remove: (id) => {
-        if (config.mode === 'http') return request('/timesheets/' + id, { method: 'DELETE' });
-        for (let i = 0; i < 30; i++) {
-          const d = ERP.dt.add(ERP.DB.today, -i);
-          const rows = ERP.DB.timesheets(d);
-          const idx = rows.findIndex(r => r.id === id);
-          if (idx > -1) {
-            rows.splice(idx, 1);
-            persist();
-            return Promise.resolve(true);
-          }
-        }
-        return Promise.resolve(false);
-      }
+      create: (entry) => request('/timesheets', { method: 'POST', body: entry }),
+      update: (id, patch) => request('/timesheets/' + id, { method: 'PATCH', body: patch }),
+      remove: (id) => request('/timesheets/' + id, { method: 'DELETE' })
     },
     articles: {
       list: (params) => request('/articles', { params }),
       get: (id) => request('/articles/' + id),
-      create: (a) => {
-        if (config.mode === 'http') return request('/articles', { method: 'POST', body: a });
-        const id = 'ART-' + String(ERP.DB.articles.length + 1).padStart(3, '0');
-        const item = Object.assign({
-          id, ref: 'MAT-' + String(ERP.DB.articles.length + 1).padStart(4, '0'),
-          location: 'Dépôt central Tunis', lastEntry: ERP.DB.today
-        }, a);
-        item.stockStatus = item.stock === 0 ? 'rupture' : (item.stock < item.min ? 'faible' : 'ok');
-        ERP.DB.articles.unshift(item);
-        persist();
-        return Promise.resolve(item);
-      },
-      update: (id, patch) => {
-        if (config.mode === 'http') return request('/articles/' + id, { method: 'PATCH', body: patch });
-        const a = ERP.DB.articles.find(x => x.id === id);
-        if (a) {
-          Object.assign(a, patch);
-          a.stockStatus = a.stock === 0 ? 'rupture' : (a.stock < a.min ? 'faible' : 'ok');
-        }
-        persist();
-        return Promise.resolve(a);
-      },
-      remove: (id) => {
-        if (config.mode === 'http') return request('/articles/' + id, { method: 'DELETE' });
-        const i = ERP.DB.articles.findIndex(x => x.id === id);
-        if (i > -1) ERP.DB.articles.splice(i, 1);
-        persist();
-        return Promise.resolve(true);
-      }
+      create: (a) => request('/articles', { method: 'POST', body: a }),
+      update: (id, patch) => request('/articles/' + id, { method: 'PATCH', body: patch }),
+      remove: (id) => request('/articles/' + id, { method: 'DELETE' })
     },
     tasks: {
       list: (params) => request('/tasks', { params }),
-      create: (t) => {
-        if (config.mode === 'http') return request('/tasks', { method: 'POST', body: t });
-        const item = Object.assign({
-          id: 'TSK-' + String(ERP.DB.tasks.length + 1).padStart(3, '0'),
-          progress: 0, status: 'a_faire', createdAt: ERP.DB.today
-        }, t);
-        ERP.DB.tasks.unshift(item);
-        persist();
-        return Promise.resolve(item);
-      },
-      update: (id, patch) => {
-        if (config.mode === 'http') return request('/tasks/' + id, { method: 'PATCH', body: patch });
-        const t = ERP.DB.tasks.find(x => x.id === id);
-        if (t) {
-          Object.assign(t, patch);
-          // Le lot correspondant du planning suit la tâche (dates et avancement)
-          const p = ERP.DB.projects.find(x => x.id === t.projectId);
-          const phase = p && (p.phases || []).find(ph => ph.taskId === id);
-          if (phase) {
-            phase.name = t.title; phase.start = t.start; phase.end = t.due;
-            phase.progress = t.progress; phase.lead = t.assignee;
-          }
-        }
-        persist();
-        return Promise.resolve(t);
-      },
-      remove: (id) => {
-        if (config.mode === 'http') return request('/tasks/' + id, { method: 'DELETE' });
-        const t = ERP.DB.tasks.find(x => x.id === id);
-        if (t) {
-          const p = ERP.DB.projects.find(x => x.id === t.projectId);
-          if (p && p.phases) {
-            const i = p.phases.findIndex(ph => ph.taskId === id);
-            if (i > -1) p.phases.splice(i, 1);
-          }
-        }
-        const i = ERP.DB.tasks.findIndex(x => x.id === id);
-        if (i > -1) ERP.DB.tasks.splice(i, 1);
-        persist();
-        return Promise.resolve(true);
-      }
+      create: (t) => request('/tasks', { method: 'POST', body: t }),
+      update: (id, patch) => request('/tasks/' + id, { method: 'PATCH', body: patch }),
+      remove: (id) => request('/tasks/' + id, { method: 'DELETE' })
     },
     budget: {
       summary: () => request('/budget/summary'),
@@ -2844,19 +1402,8 @@ window.ERP = window.ERP || {};
     },
     notifications: {
       list: () => request('/notifications'),
-      markRead: (id) => {
-        if (config.mode === 'http') return request('/notifications/' + id + '/read', { method: 'PATCH' });
-        const n = ERP.DB.notifications.find(x => x.id === id);
-        if (n) n.read = true;
-        persist();
-        return Promise.resolve(n);
-      },
-      markAllRead: () => {
-        if (config.mode === 'http') return request('/notifications/read-all', { method: 'POST' });
-        ERP.DB.notifications.forEach(n => { n.read = true; });
-        persist();
-        return Promise.resolve(true);
-      }
+      markRead: (id) => request('/notifications/' + id + '/read', { method: 'PATCH' }),
+      markAllRead: () => request('/notifications/read-all', { method: 'POST' })
     },
     search: (q) => request('/search', { params: { q } }),
 
@@ -2866,14 +1413,22 @@ window.ERP = window.ERP || {};
       update: (patch) => request('/me', { method: 'PATCH', body: patch })
     },
 
-    /* Gestion des utilisateurs — admin uniquement, pas de mode mock */
+    /* Gestion des entreprises (ingénieurs) — admin uniquement */
     admin: {
       users: {
         list: () => request('/admin/users'),
         invite: (payload) => request('/admin/users/invite', { method: 'POST', body: payload }),
         update: (id, patch) => request('/admin/users/' + id, { method: 'PATCH', body: patch }),
-        setProjects: (id, projectIds) => request('/admin/users/' + id + '/projects', { method: 'POST', body: { projectIds } })
+        setProjects: (id, projectIds) => request('/admin/users/' + id + '/projects', { method: 'POST', body: { projectIds } }),
+        seedDemo: (id) => request('/admin/users/' + id + '/demo-seed', { method: 'POST' })
       }
+    },
+
+    /* Assistants — gérés par l'ingénieur lui-même */
+    assistants: {
+      list: () => request('/assistants'),
+      invite: (payload) => request('/assistants/invite', { method: 'POST', body: payload }),
+      update: (id, patch) => request('/assistants/' + id, { method: 'PATCH', body: patch })
     }
   };
 })(window.ERP);
@@ -3027,7 +1582,8 @@ window.ERP = window.ERP || {};
     },
     userRole: {
       admin: ['Admin', 'badge badge--info'],
-      ingenieur: ['Ingénieur', 'badge']
+      ingenieur: ['Ingénieur', 'badge'],
+      assistant: ['Assistant', 'badge badge--warn']
     },
     userActive: {
       actif: ['Actif', 'badge badge--ok'],
@@ -3725,7 +2281,7 @@ ERP.Components = ERP.Components || {};
           <button data-v="cards" class="${state.view === 'cards' ? 'is-active' : ''}">${icon('kanban', 17)} Cartes</button>
           <button data-v="table" class="${state.view === 'table' ? 'is-active' : ''}">${icon('list', 17)} Tableau</button>
         </div>
-        <button class="btn btn--accent" id="prjAdd">${icon('plus', 20)} Nouveau projet</button>
+        <button class="btn btn--accent write-guard" id="prjAdd">${icon('plus', 20)} Nouveau projet</button>
       </div>
       <div id="prjResults"></div>`;
 
@@ -4021,8 +2577,8 @@ ERP.Components = ERP.Components || {};
       title: 'Attachements du chantier', sub: esc(p.name), size: 'modal--wide',
       body: `
         <div class="capture-row" style="margin-bottom:16px">
-          <button class="btn btn--accent" data-photo type="button">${icon('camera', 20)} Prendre une photo</button>
-          <button class="btn btn--primary" data-file type="button">${icon('upload', 20)} Téléverser un fichier</button>
+          <button class="btn btn--accent write-guard" data-photo type="button">${icon('camera', 20)} Prendre une photo</button>
+          <button class="btn btn--primary write-guard" data-file type="button">${icon('upload', 20)} Téléverser un fichier</button>
           <span class="spacer"></span>
           <span class="tag" id="att-n">0 pièce</span>
         </div>
@@ -4053,7 +2609,7 @@ ERP.Components = ERP.Components || {};
             </div>
             <div class="att__foot">
               <button class="btn btn--sm btn--block" data-open type="button">${icon('eye', 16)} Ouvrir</button>
-              <button class="icon-btn icon-btn--sm icon-btn--danger" data-del type="button" aria-label="Supprimer">${icon('trash', 17)}</button>
+              <button class="icon-btn icon-btn--sm icon-btn--danger write-guard" data-del type="button" aria-label="Supprimer">${icon('trash', 17)}</button>
             </div>
           </article>`).join('')}</div>`
         : ERP.UI.empty('Aucune pièce jointe',
@@ -4065,7 +2621,7 @@ ERP.Components = ERP.Components || {};
         const isImage = f.type && f.type.startsWith('image/');
         const url = isImage ? URL.createObjectURL(f) : null;
         await ERP.Api.attachments.create(p.id, {
-          name: f.name || `Photo chantier ${ERP.DB.today} (${(ERP.DB.attachments[p.id] || []).length + 1}).jpg`,
+          name: f.name || `Photo chantier ${ERP.DB.today} (${Date.now().toString(36)}).jpg`,
           kind: forcedKind || fileKind(f), size: f.size, url
         });
       }
@@ -4113,9 +2669,10 @@ ERP.Components = ERP.Components || {};
     const p = await ERP.Api.projects.get(params.id);
     if (!p) { view.innerHTML = ERP.UI.empty('Projet introuvable', 'Ce chantier n\'existe pas ou a été archivé.'); return; }
 
-    const [tasks, workers] = await Promise.all([
+    const [tasks, workers, attachments] = await Promise.all([
       ERP.Api.tasks.list({ projectId: p.id }),
-      ERP.Api.workers.list({ projectId: p.id })
+      ERP.Api.workers.list({ projectId: p.id }),
+      ERP.Api.attachments.list(p.id)
     ]);
     const daysLeft = ERP.dt.diff(ERP.DB.today, p.end);
 
@@ -4130,9 +2687,9 @@ ERP.Components = ERP.Components || {};
         <span class="spacer"></span>
         <button class="btn btn--sm" data-report type="button">${icon('printer', 18)} Rapport</button>
         <button class="btn btn--sm" data-attach type="button">${icon('paperclip', 18)} Attachements
-          <span class="chip__n num" id="attCount">${(ERP.DB.attachments[p.id] || []).length}</span></button>
-        <button class="btn btn--sm btn--primary" data-edit type="button">${icon('edit', 18)} Modifier</button>
-        <button class="btn btn--sm btn--danger" data-del-project type="button">${icon('trash', 18)} Supprimer</button>
+          <span class="chip__n num" id="attCount">${attachments.length}</span></button>
+        <button class="btn btn--sm btn--primary write-guard" data-edit type="button">${icon('edit', 18)} Modifier</button>
+        <button class="btn btn--sm btn--danger write-guard" data-del-project type="button">${icon('trash', 18)} Supprimer</button>
       </div>
 
       ${p.daysLate ? `<div class="alert-band alert-band--danger" style="margin-bottom:var(--gap)">
@@ -4311,9 +2868,9 @@ ERP.Components = ERP.Components || {};
       toast('Projet supprimé', 'ok');
       ERP.Router.go('/projets');
     };
-    view.querySelector('[data-attach]').onclick = () => openAttachments(p, () => {
+    view.querySelector('[data-attach]').onclick = () => openAttachments(p, async () => {
       const c = view.querySelector('#attCount');
-      if (c) c.textContent = (ERP.DB.attachments[p.id] || []).length;
+      if (c) c.textContent = (await ERP.Api.attachments.list(p.id)).length;
     });
     view.querySelector('[data-report]').onclick = () => {
       toast('Rapport de chantier généré (PDF simulé)', 'ok'); window.print();
@@ -4619,7 +3176,7 @@ window.ERP = window.ERP || {};
         <button class="btn btn--sm" id="ptToday">Aujourd'hui</button>
         <span class="spacer"></span>
         <button class="btn" id="ptWorker">${icon('hardhat', 20)} Nouvel ouvrier</button>
-        <button class="btn btn--accent" id="ptAdd">${icon('plus', 20)} Ajouter un pointage</button>
+        <button class="btn btn--accent write-guard" id="ptAdd">${icon('plus', 20)} Ajouter un pointage</button>
       </div>
 
       <div class="kpis" style="grid-template-columns:repeat(5,minmax(0,1fr))" id="ptKpis"></div>
@@ -4714,7 +3271,7 @@ window.ERP = window.ERP || {};
           <td class="t-right"><span class="hours-cell">${r.status === 'absent' ? '—' : fmt.hours(r.hours)}</span></td>
           <td>${span}</td>
           <td>${badge('presence', r.status)}</td>
-          <td class="t-right"><button class="icon-btn icon-btn--ghost" data-edit="${r.workerId}" aria-label="Modifier le pointage">${icon('edit', 18)}</button></td>
+          <td class="t-right"><button class="icon-btn icon-btn--ghost write-guard" data-edit="${r.workerId}" aria-label="Modifier le pointage">${icon('edit', 18)}</button></td>
         </tr>`;
       }).join('');
     }
@@ -4807,10 +3364,12 @@ window.ERP = window.ERP || {};
     }
   }
 
-  function openForm(workerId, done) {
+  async function openForm(workerId, done) {
     const workers = ERP.DB.workers;
     const projects = ERP.DB.projects.filter(p => p.status !== 'termine');
-    const existing = workerId ? ERP.DB.timesheets(state.date).find(r => r.workerId === workerId) : null;
+    const existing = workerId
+      ? (await ERP.Api.timesheets.list({ date: state.date })).find(r => r.workerId === workerId)
+      : null;
     const w = workerId ? workers.find(x => x.id === workerId) : null;
 
     const m = ERP.UI.modal({
@@ -4892,13 +3451,13 @@ window.ERP = window.ERP || {};
     const w = await ERP.Api.workers.get(params.id);
     if (!w) { view.innerHTML = ERP.UI.empty('Ouvrier introuvable', 'Cette fiche n\'existe pas.'); return; }
 
-    const history = [];
+    const days = [];
     for (let i = 0; i < 12; i++) {
       const d = dt.add(ERP.DB.today, -i);
-      if (dt.isWeekend(d)) continue;
-      const e = ERP.DB.timesheets(d).find(t => t.workerId === w.id);
-      if (e) history.push(e);
+      if (!dt.isWeekend(d)) days.push(d);
     }
+    const dayRows = await Promise.all(days.map((d) => ERP.Api.timesheets.list({ date: d })));
+    const history = dayRows.map((rows) => rows.find((t) => t.workerId === w.id)).filter(Boolean);
 
     view.innerHTML = `
       <div class="backbar">
@@ -4912,7 +3471,7 @@ window.ERP = window.ERP || {};
         <span class="spacer"></span>
         <button class="btn btn--sm" data-call type="button">${icon('phone', 18)} Appeler</button>
         <button class="btn btn--sm" data-edit-worker type="button">${icon('edit', 18)} Modifier</button>
-        <button class="btn btn--sm btn--accent" data-point type="button">${icon('plus', 18)} Pointer</button>
+        <button class="btn btn--sm btn--accent write-guard" data-point type="button">${icon('plus', 18)} Pointer</button>
       </div>
 
       <div class="kpis" style="grid-template-columns:repeat(4,minmax(0,1fr))">
@@ -5009,7 +3568,7 @@ window.ERP = window.ERP || {};
           <span class="ico">${icon('search', 19)}</span>
           <input type="search" id="clSearch" placeholder="Société, contact ou ville…" value="${esc(state.q)}">
         </div>
-        <button class="btn btn--accent" id="clAdd">${icon('plus', 20)} Nouveau client</button>
+        <button class="btn btn--accent write-guard" id="clAdd">${icon('plus', 20)} Nouveau client</button>
       </div>
       <section class="card">
         <div class="card__head"><h3>Portefeuille clients</h3><span class="spacer"></span><span class="tag" id="clCount"></span></div>
@@ -5112,7 +3671,7 @@ window.ERP = window.ERP || {};
             <div class="card__head"><h3>Historique commercial</h3>
               ${c.quotes.length ? `<span class="tag num">${c.quotes.length} devis établi${c.quotes.length > 1 ? 's' : ''}</span>` : ''}
               <span class="spacer"></span>
-              <button class="btn btn--sm btn--accent" data-quote2 type="button">${icon('plus', 17)} Devis</button></div>
+              <button class="btn btn--sm btn--accent write-guard" data-quote2 type="button">${icon('plus', 17)} Devis</button></div>
             <div class="card__body card__body--flush"><div class="table-wrap">
               <table class="tbl"><thead><tr><th>Type</th><th>Référence</th><th>Date</th><th class="t-right">Montant</th><th>Détail</th><th class="t-right">Action</th></tr></thead>
                 <tbody>${c.history.map(h => `<tr>
@@ -5124,7 +3683,7 @@ window.ERP = window.ERP || {};
                   <td class="small muted">${esc(h.note || '—')}</td>
                   <td class="t-right">${h.quoteId ? (quoteById(c, h.quoteId).projectId
                     ? `<a class="btn btn--sm btn--ghost" href="#/projets/${quoteById(c, h.quoteId).projectId}">Voir le projet</a>`
-                    : `<button class="btn btn--sm btn--accent" data-convert="${h.quoteId}" type="button">Convertir en projet</button>`) : '—'}</td>
+                    : `<button class="btn btn--sm btn--accent write-guard" data-convert="${h.quoteId}" type="button">Convertir en projet</button>`) : '—'}</td>
                   </tr>`).join('')}</tbody></table>
             </div></div>
           </section>
@@ -5132,8 +3691,8 @@ window.ERP = window.ERP || {};
 
         <section class="card" style="align-self:start">
           <div class="card__head"><h3>Coordonnées</h3><span class="spacer"></span>
-            <button class="btn btn--sm btn--ghost" data-edit type="button">${icon('edit', 17)}</button>
-            <button class="btn btn--sm btn--ghost" data-del-client type="button" style="color:var(--danger)">${icon('trash', 17)}</button></div>
+            <button class="btn btn--sm btn--ghost write-guard" data-edit type="button">${icon('edit', 17)}</button>
+            <button class="btn btn--sm btn--ghost write-guard" data-del-client type="button" style="color:var(--danger)">${icon('trash', 17)}</button></div>
           <div class="card__body">
             <dl class="props" style="grid-template-columns:1fr">
               <div class="prop"><dt>Société</dt><dd>${esc(c.company)}</dd></div>
@@ -5382,7 +3941,7 @@ window.ERP.Components = window.ERP.Components || {};
           <button data-v="cards" class="${state.view === 'cards' ? 'is-active' : ''}">${icon('kanban', 17)}</button>
           <button data-v="table" class="${state.view === 'table' ? 'is-active' : ''}">${icon('list', 17)}</button>
         </div>
-        <button class="btn btn--accent" id="arAdd">${icon('plus', 20)} Nouvel article</button>
+        <button class="btn btn--accent write-guard" id="arAdd">${icon('plus', 20)} Nouvel article</button>
       </div>
 
       <div id="arAlerts"></div>
@@ -5516,8 +4075,8 @@ window.ERP.Components = window.ERP.Components || {};
                 `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
             <div class="field"><label for="mv-qty">Quantité (${a.unit})</label>
               <input id="mv-qty" type="number" min="1" value="10"></div>
-            <button class="btn btn--accent" data-out type="button">${icon('minus', 18)} Sortie chantier</button>
-            <button class="btn btn--primary" data-in type="button">${icon('plus', 18)} Entrée dépôt</button>
+            <button class="btn btn--accent write-guard" data-out type="button">${icon('minus', 18)} Sortie chantier</button>
+            <button class="btn btn--primary write-guard" data-in type="button">${icon('plus', 18)} Entrée dépôt</button>
           </div>
         </div>
 
@@ -5535,10 +4094,10 @@ window.ERP.Components = window.ERP.Components || {};
               <td></td></tr>
           </tbody></table></div>`
           : '<div class="pick__empty">Cet article n\'est affecté à aucun chantier pour le moment.</div>'}`,
-      footer: `<button class="btn btn--danger" data-del>${icon('trash', 18)} Supprimer</button>
+      footer: `<button class="btn btn--danger write-guard" data-del>${icon('trash', 18)} Supprimer</button>
                <span style="flex:1"></span>
                <button class="btn" data-close2>Fermer</button>
-               <button class="btn btn--primary" data-edit>${icon('edit', 18)} Modifier</button>`
+               <button class="btn btn--primary write-guard" data-edit>${icon('edit', 18)} Modifier</button>`
     });
 
     const qty = () => Math.max(1, +m.body.querySelector('#mv-qty').value || 0);
@@ -5636,7 +4195,7 @@ window.ERP.Components = window.ERP.Components || {};
           <span class="spacer"></span>
           ${alerts ? `<span class="badge badge--warn">${alerts} en tension de stock</span>` : ''}
           <span class="money money--sm num">${fmt.money(total)}</span>
-          <button class="btn btn--sm btn--accent" data-addmat type="button">${icon('plus', 18)} Affecter</button>
+          <button class="btn btn--sm btn--accent write-guard" data-addmat type="button">${icon('plus', 18)} Affecter</button>
         </div>
         <div class="card__body card__body--flush">
           ${list.length ? `<div class="table-wrap"><table class="tbl tbl--rows">
@@ -5658,9 +4217,9 @@ window.ERP.Components = window.ERP.Components || {};
         <td class="small">${esc(m.category)}</td>
         <td>
           <div class="stepper" style="justify-content:flex-end">
-            <button class="stepper__btn" data-qty="-1" type="button" aria-label="Diminuer la quantité">${icon('minus', 16)}</button>
+            <button class="stepper__btn write-guard" data-qty="-1" type="button" aria-label="Diminuer la quantité">${icon('minus', 16)}</button>
             <b class="num" style="min-width:76px;text-align:right;font-size:15px">${fmt.dec(m.qty, 0)} <small class="muted">${m.unit}</small></b>
-            <button class="stepper__btn" data-qty="1" type="button" aria-label="Augmenter la quantité">${icon('plus', 16)}</button>
+            <button class="stepper__btn write-guard" data-qty="1" type="button" aria-label="Augmenter la quantité">${icon('plus', 16)}</button>
           </div>
         </td>
         <td class="t-right num">${fmt.dec(m.price, 2)} DT</td>
@@ -5668,8 +4227,8 @@ window.ERP.Components = window.ERP.Components || {};
         <td>${badge('stock', m.stockStatus)}<div class="cell-sub num">${fmt.dec(m.stock, 0)} ${m.unit} au dépôt</div></td>
         <td class="num">${fmt.date(m.date)}</td>
         <td><div class="row-actions">
-          <button class="icon-btn icon-btn--sm" data-editmat type="button" aria-label="Modifier la quantité">${icon('edit', 17)}</button>
-          <button class="icon-btn icon-btn--sm icon-btn--danger" data-delmat type="button" aria-label="Retourner au dépôt">${icon('trash', 17)}</button>
+          <button class="icon-btn icon-btn--sm write-guard" data-editmat type="button" aria-label="Modifier la quantité">${icon('edit', 17)}</button>
+          <button class="icon-btn icon-btn--sm icon-btn--danger write-guard" data-delmat type="button" aria-label="Retourner au dépôt">${icon('trash', 17)}</button>
         </div></td>
       </tr>`;
     }
@@ -5857,7 +4416,7 @@ window.ERP = window.ERP || {};
           <button data-v="cards" class="${state.view === 'cards' ? 'is-active' : ''}">${icon('kanban', 17)} Cartes</button>
           <button data-v="table" class="${state.view === 'table' ? 'is-active' : ''}">${icon('list', 17)} Tableau</button>
         </div>
-        <button class="btn btn--accent" id="frAdd" type="button">${icon('plus', 20)} Nouveau fournisseur</button>
+        <button class="btn btn--accent write-guard" id="frAdd" type="button">${icon('plus', 20)} Nouveau fournisseur</button>
       </div>
       <div id="frResults"></div>`;
 
@@ -6032,7 +4591,7 @@ window.ERP = window.ERP || {};
                     <div class="cell-sub">seuil ${fmt.dec(a.min, 0)}</div></td>
                   <td>${badge('stock', a.stockStatus)}</td>
                   <td><div class="row-actions">
-                    <button class="btn btn--sm" data-affect type="button">${icon('plus', 16)} Affecter</button>
+                    <button class="btn btn--sm write-guard" data-affect type="button">${icon('plus', 16)} Affecter</button>
                   </div></td>
                 </tr>`).join('')}</tbody></table></div>`
                 : ERP.UI.empty('Aucun matériau rattaché',
@@ -6064,7 +4623,7 @@ window.ERP = window.ERP || {};
         <div class="stack">
           <section class="card">
             <div class="card__head"><h3>Coordonnées</h3><span class="spacer"></span>
-              <button class="btn btn--sm btn--ghost" data-edit type="button">${icon('edit', 17)}</button></div>
+              <button class="btn btn--sm btn--ghost write-guard" data-edit type="button">${icon('edit', 17)}</button></div>
             <div class="card__body">
               <dl class="props" style="grid-template-columns:1fr">
                 <div class="prop"><dt>Raison sociale</dt><dd>${esc(s.company)}</dd></div>
@@ -6403,21 +4962,21 @@ window.ERP.Components = window.ERP.Components || {};
       <td>${badge('priority', t.priority)}</td>
       <td>
         <div class="stepper">
-          <button class="stepper__btn" data-step="-10" type="button" aria-label="Reculer l'avancement">${icon('minus', 16)}</button>
+          <button class="stepper__btn write-guard" data-step="-10" type="button" aria-label="Reculer l'avancement">${icon('minus', 16)}</button>
           <div class="stepper__bar">${pbar(t.progress, t.late ? 'pbar__fill--danger' : t.status === 'termine' ? 'pbar__fill--ok' : '', true)}
             <b class="num">${t.progress}%</b></div>
-          <button class="stepper__btn" data-step="10" type="button" aria-label="Avancer la tâche">${icon('plus', 16)}</button>
+          <button class="stepper__btn write-guard" data-step="10" type="button" aria-label="Avancer la tâche">${icon('plus', 16)}</button>
         </div>
       </td>
       <td>
-        <select class="select--mini" data-status aria-label="Statut de la tâche">
+        <select class="select--mini write-guard" data-status aria-label="Statut de la tâche">
           ${COLUMNS.map(c => `<option value="${c.key}" ${t.status === c.key ? 'selected' : ''}>${c.label}</option>`).join('')}
         </select>
       </td>
       <td>
         <div class="row-actions">
-          <button class="icon-btn icon-btn--sm" data-edit type="button" aria-label="Modifier la tâche">${icon('edit', 17)}</button>
-          <button class="icon-btn icon-btn--sm icon-btn--danger" data-del type="button" aria-label="Supprimer la tâche">${icon('trash', 17)}</button>
+          <button class="icon-btn icon-btn--sm write-guard" data-edit type="button" aria-label="Modifier la tâche">${icon('edit', 17)}</button>
+          <button class="icon-btn icon-btn--sm icon-btn--danger write-guard" data-del type="button" aria-label="Supprimer la tâche">${icon('trash', 17)}</button>
         </div>
       </td>
     </tr>`;
@@ -6492,7 +5051,7 @@ window.ERP.Components = window.ERP.Components || {};
           <span class="tag num">${finished}/${tasks.length} terminées</span>
           <span class="spacer"></span>
           ${late ? `<span class="badge badge--danger">${late} en retard</span>` : ''}
-          <button class="btn btn--sm btn--accent" data-add type="button">${icon('plus', 18)} Ajouter</button>
+          <button class="btn btn--sm btn--accent write-guard" data-add type="button">${icon('plus', 18)} Ajouter</button>
         </div>
         <div class="card__body card__body--flush">
           ${tasks.length ? taskTable(tasks, false) : ERP.UI.empty('Aucune tâche sur ce chantier',
@@ -6558,7 +5117,7 @@ window.ERP.Components = window.ERP.Components || {};
           <span class="ico">${icon('search', 19)}</span>
           <input type="search" id="tkSearch" placeholder="Tâche ou responsable…" value="${esc(state.q)}">
         </div>
-        <button class="btn btn--accent" id="tkAdd" type="button">${icon('plus', 20)} Nouvelle tâche</button>
+        <button class="btn btn--accent write-guard" id="tkAdd" type="button">${icon('plus', 20)} Nouvelle tâche</button>
       </div>
       <section class="card" id="tkList"></section>`;
 
@@ -6620,7 +5179,7 @@ window.ERP.Components = window.ERP.Components || {};
         <div class="toolbar">
           <span class="tag num">${cat.length} tâches types · ${cat.filter(c => c.active).length} actives</span>
           <span class="spacer"></span>
-          <button class="btn btn--accent" data-newcat type="button">${icon('plus', 20)} Nouvelle tâche type</button>
+          <button class="btn btn--accent write-guard" data-newcat type="button">${icon('plus', 20)} Nouvelle tâche type</button>
         </div>
 
         ${phases.map(ph => {
@@ -6638,14 +5197,14 @@ window.ERP.Components = window.ERP.Components || {};
                   <td>${esc(c.trade)}</td>
                   <td class="t-right num"><b>${c.defaultDays}</b> j</td>
                   <td>
-                    <label class="switch">
+                    <label class="switch write-guard">
                       <input type="checkbox" data-active ${c.active ? 'checked' : ''}>
                       <span>${c.active ? 'Proposée' : 'Masquée'}</span>
                     </label>
                   </td>
                   <td><div class="row-actions">
-                    <button class="icon-btn icon-btn--sm" data-editcat type="button" aria-label="Modifier">${icon('edit', 17)}</button>
-                    <button class="icon-btn icon-btn--sm icon-btn--danger" data-delcat type="button" aria-label="Supprimer">${icon('trash', 17)}</button>
+                    <button class="icon-btn icon-btn--sm write-guard" data-editcat type="button" aria-label="Modifier">${icon('edit', 17)}</button>
+                    <button class="icon-btn icon-btn--sm icon-btn--danger write-guard" data-delcat type="button" aria-label="Supprimer">${icon('trash', 17)}</button>
                   </div></td>
                 </tr>`).join('')}
               </tbody></table>
@@ -7028,8 +5587,11 @@ window.ERP = window.ERP || {};
 </script>
 <script>
 /* ===== js/users.js =====
-   BâtiPilot — Module UTILISATEURS (admin uniquement)
-   Invite des ingénieurs, leur assigne des chantiers, gère rôle/activation.
+   BâtiPilot — Module ENTREPRISES (admin uniquement)
+   Un ingénieur = une entreprise : lui-même, ses assistants et toutes ses
+   données (chantiers, clients, ouvriers...). L'admin approuve/active les
+   comptes, gère les assistants de chaque entreprise et peut amorcer une
+   entreprise vide avec des données de démonstration.
    Les policies RLS empêchent un non-admin d'atteindre ces données même en
    forçant l'URL — ce module est une commodité UI, pas la barrière de sécurité. */
 window.ERP = window.ERP || {};
@@ -7050,61 +5612,87 @@ window.ERP = window.ERP || {};
         <button class="btn btn--accent" id="usInvite">${icon('plus', 20)} Inviter un ingénieur</button>
       </div>
       <section class="card">
-        <div class="card__head"><h3>Comptes</h3><span class="spacer"></span><span class="tag" id="usCount"></span></div>
+        <div class="card__head"><h3>Entreprises</h3><span class="spacer"></span><span class="tag" id="usCount"></span></div>
         <div class="card__body card__body--flush"><div class="table-wrap">
           <table class="tbl"><thead><tr>
-            <th>Nom</th><th>E-mail</th><th>Rôle</th><th>Statut</th><th>Chantiers assignés</th><th class="t-right">Actions</th>
+            <th>Ingénieur</th><th>E-mail</th><th>Statut</th><th>Assistants</th><th class="t-right">Actions</th>
           </tr></thead><tbody id="usRows"></tbody></table>
+        </div></div>
+      </section>
+      <section class="card" style="margin-top:16px">
+        <div class="card__head"><h3>Administrateurs</h3></div>
+        <div class="card__body card__body--flush"><div class="table-wrap">
+          <table class="tbl"><thead><tr><th>Nom</th><th>E-mail</th><th>Statut</th></tr></thead><tbody id="usAdminRows"></tbody></table>
         </div></div>
       </section>`;
 
-    let projects = [];
+    let allUsers = [];
     async function refresh() {
-      const [users, allProjects] = await Promise.all([
-        ERP.Api.admin.users.list(),
-        projects.length ? Promise.resolve(projects) : ERP.Api.projects.list()
-      ]);
-      projects = allProjects;
-      const nameById = Object.fromEntries(projects.map(p => [p.id, p.name]));
+      allUsers = await ERP.Api.admin.users.list();
+      const companies = allUsers.filter(u => u.role === 'ingenieur');
+      const admins = allUsers.filter(u => u.role === 'admin');
+      const assistantsByCompany = {};
+      allUsers.filter(u => u.role === 'assistant').forEach(a => {
+        (assistantsByCompany[a.companyId] = assistantsByCompany[a.companyId] || []).push(a);
+      });
 
-      view.querySelector('#usCount').textContent = users.length + ' compte' + (users.length > 1 ? 's' : '');
+      view.querySelector('#usCount').textContent = companies.length + ' entreprise' + (companies.length > 1 ? 's' : '');
       const tb = view.querySelector('#usRows');
-      if (!users.length) {
-        tb.innerHTML = `<tr><td colspan="6">${ERP.UI.empty('Aucun utilisateur', 'Invitez un ingénieur pour commencer.')}</td></tr>`;
-        return;
-      }
-      tb.innerHTML = users.map(u => `
+      tb.innerHTML = companies.length ? companies.map(u => {
+        const n = (assistantsByCompany[u.id] || []).length;
+        return `
         <tr data-id="${u.id}">
           <td><div class="idcell">
               <span class="avatar avatar--soft">${esc((u.fullName || u.email || '?').slice(0, 2).toUpperCase())}</span>
               <span class="idcell__txt"><div class="cell-main">${esc(u.fullName || '—')}</div></span>
             </div></td>
           <td class="small">${esc(u.email)}</td>
-          <td>${badge('userRole', u.role)}</td>
           <td>${badge('userActive', u.active ? 'actif' : 'inactif')}</td>
-          <td class="small">${(u.projectIds || []).map(id => esc(nameById[id] || id)).join(', ') || '—'}</td>
+          <td class="small">${n ? n + ' assistant' + (n > 1 ? 's' : '') : '—'}</td>
           <td class="t-right">
-            ${u.role === 'admin' ? '' : `<button class="btn btn--sm" data-assign>${icon('building', 16)} Chantiers</button>`}
+            <button class="btn btn--sm" data-assistants>${icon('users', 16)} Assistants</button>
+            <button class="btn btn--sm" data-seed>${icon('download', 16)} Données démo</button>
             <button class="btn btn--sm" data-toggle>${u.active ? 'Désactiver' : 'Activer'}</button>
           </td>
-        </tr>`).join('');
+        </tr>`;
+      }).join('') : `<tr><td colspan="5">${ERP.UI.empty('Aucune entreprise', 'Invitez un ingénieur pour commencer.')}</td></tr>`;
+
+      const atb = view.querySelector('#usAdminRows');
+      atb.innerHTML = admins.length ? admins.map(u => `
+        <tr><td>${esc(u.fullName || '—')}</td><td class="small">${esc(u.email)}</td><td>${badge('userActive', u.active ? 'actif' : 'inactif')}</td></tr>
+      `).join('') : `<tr><td colspan="3" class="small">Aucun autre administrateur.</td></tr>`;
     }
 
     await refresh();
 
-    view.querySelector('#usInvite').onclick = () => openInvite(refresh, projects);
+    view.querySelector('#usInvite').onclick = () => openInvite(refresh);
 
-    on(view, 'click', '[data-assign]', async (e, t) => {
-      const row = t.closest('tr');
-      const users = await ERP.Api.admin.users.list();
-      const u = users.find(x => x.id === row.dataset.id);
-      openAssign(u, projects, refresh);
+    on(view, 'click', '[data-assistants]', (e, t) => {
+      const u = allUsers.find(x => x.id === t.closest('tr').dataset.id);
+      openAssistants(u, allUsers.filter(x => x.role === 'assistant' && x.companyId === u.id), refresh);
+    });
+
+    on(view, 'click', '[data-seed]', async (e, t) => {
+      const u = allUsers.find(x => x.id === t.closest('tr').dataset.id);
+      const ok = await confirm({
+        title: 'Charger les données de démonstration ?',
+        confirmLabel: 'Charger',
+        text: `Crée des chantiers, clients, ouvriers et articles d'exemple pour ${esc(u.fullName || u.email)}. Uniquement possible si l'entreprise est encore vide.`
+      });
+      if (!ok) return;
+      try {
+        await ERP.Api.admin.users.seedDemo(u.id);
+        toast('Données de démonstration chargées', 'ok');
+      } catch (err) {
+        const msg = /company_already_has_data/.test(err.message || '')
+          ? 'Cette entreprise a déjà des données — le chargement de démo est réservé aux entreprises vides.'
+          : 'Erreur : ' + (err.message || err);
+        toast(msg, 'danger');
+      }
     });
 
     on(view, 'click', '[data-toggle]', async (e, t) => {
-      const row = t.closest('tr');
-      const users = await ERP.Api.admin.users.list();
-      const u = users.find(x => x.id === row.dataset.id);
+      const u = allUsers.find(x => x.id === t.closest('tr').dataset.id);
       const ok = await confirm({
         title: u.active ? 'Désactiver ce compte ?' : 'Activer ce compte ?',
         confirmLabel: u.active ? 'Désactiver' : 'Activer',
@@ -7121,18 +5709,13 @@ window.ERP = window.ERP || {};
   }
 
   /* ---------- Inviter un ingénieur ---------- */
-  function openInvite(done, projects) {
+  function openInvite(done) {
     const m = ERP.UI.modal({
       title: 'Inviter un ingénieur',
       sub: 'Un e-mail avec un lien de création de mot de passe lui sera envoyé',
       body: `<div class="form-grid">
           <div class="field field--full"><label for="us-name">Nom complet</label><input id="us-name" placeholder="Ex. : Amine Rebaya"></div>
           <div class="field field--full"><label for="us-email">E-mail</label><input id="us-email" type="email" placeholder="prenom.nom@entreprise.tn"></div>
-          <div class="field field--full"><label for="us-projects">Chantiers assignés</label>
-            <select id="us-projects" multiple size="6">
-              ${projects.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}
-            </select>
-          </div>
         </div>`,
       footer: `<button class="btn" data-cancel>Annuler</button>
                <button class="btn btn--primary" data-save>${icon('save', 18)} Envoyer l'invitation</button>`
@@ -7141,10 +5724,9 @@ window.ERP = window.ERP || {};
     m.foot.querySelector('[data-save]').onclick = async () => {
       const email = m.body.querySelector('#us-email').value.trim();
       const fullName = m.body.querySelector('#us-name').value.trim();
-      const projectIds = Array.from(m.body.querySelector('#us-projects').selectedOptions).map(o => o.value);
       if (!email) { toast('L\'e-mail est obligatoire', 'danger'); return; }
       try {
-        await ERP.Api.admin.users.invite({ email, fullName, projectIds });
+        await ERP.Api.admin.users.invite({ email, fullName });
         toast('Invitation envoyée à ' + email, 'ok');
         m.close();
         if (done) done();
@@ -7154,28 +5736,147 @@ window.ERP = window.ERP || {};
     };
   }
 
-  /* ---------- Assigner des chantiers ---------- */
-  function openAssign(u, projects, done) {
-    const current = new Set(u.projectIds || []);
+  /* ---------- Assistants d'une entreprise ---------- */
+  function openAssistants(company, assistants, done) {
     const m = ERP.UI.modal({
-      title: 'Chantiers assignés',
-      sub: esc(u.fullName || u.email),
+      title: 'Assistants',
+      sub: esc(company.fullName || company.email),
       body: `<div class="form-grid">
-          <div class="field field--full"><label for="us-a-projects">Chantiers</label>
-            <select id="us-a-projects" multiple size="8">
-              ${projects.map(p => `<option value="${p.id}" ${current.has(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
-            </select>
+          <div class="field field--full"><label for="us-as-name">Nom complet</label><input id="us-as-name" placeholder="Ex. : Sarra Bel Haj"></div>
+          <div class="field field--full"><label for="us-as-email">E-mail</label><input id="us-as-email" type="email" placeholder="prenom.nom@entreprise.tn"></div>
+          <div class="field field--full"><button class="btn btn--sm" id="us-as-add">${icon('plus', 16)} Ajouter un assistant</button></div>
+          <div class="field field--full">
+            <div class="table-wrap"><table class="tbl"><thead><tr><th>Nom</th><th>E-mail</th><th>Statut</th><th class="t-right">Actions</th></tr></thead>
+              <tbody id="us-as-rows">${assistants.map(a => `
+                <tr data-id="${a.id}">
+                  <td>${esc(a.fullName || '—')}</td>
+                  <td class="small">${esc(a.email)}</td>
+                  <td>${badge('userActive', a.active ? 'actif' : 'inactif')}</td>
+                  <td class="t-right"><button class="btn btn--sm" data-as-toggle>${a.active ? 'Désactiver' : 'Activer'}</button></td>
+                </tr>`).join('') || `<tr><td colspan="4" class="small">Aucun assistant.</td></tr>`}</tbody>
+            </table></div>
           </div>
         </div>`,
+      footer: `<button class="btn" data-cancel>Fermer</button>`
+    });
+    m.foot.querySelector('[data-cancel]').onclick = m.close;
+    m.body.querySelector('#us-as-add').onclick = async () => {
+      const email = m.body.querySelector('#us-as-email').value.trim();
+      const fullName = m.body.querySelector('#us-as-name').value.trim();
+      if (!email) { toast('L\'e-mail est obligatoire', 'danger'); return; }
+      try {
+        await ERP.Api.admin.users.invite({ email, fullName, role: 'assistant', companyId: company.id });
+        toast('Invitation envoyée à ' + email, 'ok');
+        m.close();
+        if (done) done();
+      } catch (err) {
+        toast('Erreur : ' + (err.message || err), 'danger');
+      }
+    };
+    on(m.body, 'click', '[data-as-toggle]', async (e, t) => {
+      const id = t.closest('tr').dataset.id;
+      const a = assistants.find(x => x.id === id);
+      await ERP.Api.admin.users.update(a.id, { active: !a.active });
+      toast(a.active ? 'Compte désactivé' : 'Compte activé', 'ok');
+      m.close();
+      if (done) done();
+    });
+  }
+
+  ERP.Router.add('/utilisateurs', { title: 'Entreprises', sub: 'Ingénieurs, assistants et accès', render: renderList });
+})(window.ERP);
+
+</script>
+<script>
+/* ===== js/my-assistants.js =====
+   BâtiPilot — Module MES ASSISTANTS (ingénieur uniquement)
+   Un assistant appartient à l'entreprise de l'ingénieur qui l'invite : il a
+   un accès en lecture à tout et peut gérer les ouvriers (Pointage). Ce
+   module permet à l'ingénieur d'inviter, voir et désactiver ses assistants. */
+window.ERP = window.ERP || {};
+
+(function (ERP) {
+  'use strict';
+  const { icon, on, esc, toast, confirm, badge } = ERP.UI;
+
+  async function render(params, view) {
+    if (!ERP.DB.user || ERP.DB.user.role !== 'ingenieur') {
+      view.innerHTML = ERP.UI.empty('Accès réservé', 'Cette page est réservée aux ingénieurs.');
+      return;
+    }
+
+    view.innerHTML = `
+      <div class="toolbar">
+        <span class="spacer"></span>
+        <button class="btn btn--accent" id="asInvite">${icon('plus', 20)} Inviter un assistant</button>
+      </div>
+      <section class="card">
+        <div class="card__head"><h3>Mes assistants</h3><span class="spacer"></span><span class="tag" id="asCount"></span></div>
+        <div class="card__body card__body--flush"><div class="table-wrap">
+          <table class="tbl"><thead><tr>
+            <th>Nom</th><th>E-mail</th><th>Statut</th><th class="t-right">Actions</th>
+          </tr></thead><tbody id="asRows"></tbody></table>
+        </div></div>
+      </section>`;
+
+    async function refresh() {
+      const assistants = await ERP.Api.assistants.list();
+      view.querySelector('#asCount').textContent = assistants.length + ' assistant' + (assistants.length > 1 ? 's' : '');
+      const tb = view.querySelector('#asRows');
+      tb.innerHTML = assistants.length ? assistants.map(a => `
+        <tr data-id="${a.id}">
+          <td><div class="idcell">
+              <span class="avatar avatar--soft">${esc((a.fullName || a.email || '?').slice(0, 2).toUpperCase())}</span>
+              <span class="idcell__txt"><div class="cell-main">${esc(a.fullName || '—')}</div></span>
+            </div></td>
+          <td class="small">${esc(a.email)}</td>
+          <td>${badge('userActive', a.active ? 'actif' : 'inactif')}</td>
+          <td class="t-right"><button class="btn btn--sm" data-toggle>${a.active ? 'Désactiver' : 'Activer'}</button></td>
+        </tr>`).join('') : `<tr><td colspan="4">${ERP.UI.empty('Aucun assistant', 'Invitez un assistant pour vous aider sur le terrain.')}</td></tr>`;
+    }
+
+    await refresh();
+
+    view.querySelector('#asInvite').onclick = () => openInvite(refresh);
+
+    on(view, 'click', '[data-toggle]', async (e, t) => {
+      const id = t.closest('tr').dataset.id;
+      const assistants = await ERP.Api.assistants.list();
+      const a = assistants.find(x => x.id === id);
+      const ok = await confirm({
+        title: a.active ? 'Désactiver cet assistant ?' : 'Activer cet assistant ?',
+        confirmLabel: a.active ? 'Désactiver' : 'Activer',
+        danger: a.active,
+        text: a.active
+          ? 'L\'assistant ne pourra plus se connecter tant que le compte n\'est pas réactivé.'
+          : 'L\'assistant pourra de nouveau se connecter.'
+      });
+      if (!ok) return;
+      await ERP.Api.assistants.update(a.id, { active: !a.active });
+      toast(a.active ? 'Assistant désactivé' : 'Assistant activé', 'ok');
+      refresh();
+    });
+  }
+
+  function openInvite(done) {
+    const m = ERP.UI.modal({
+      title: 'Inviter un assistant',
+      sub: 'Un e-mail avec un lien de création de mot de passe lui sera envoyé',
+      body: `<div class="form-grid">
+          <div class="field field--full"><label for="as-name">Nom complet</label><input id="as-name" placeholder="Ex. : Sarra Bel Haj"></div>
+          <div class="field field--full"><label for="as-email">E-mail</label><input id="as-email" type="email" placeholder="prenom.nom@entreprise.tn"></div>
+        </div>`,
       footer: `<button class="btn" data-cancel>Annuler</button>
-               <button class="btn btn--primary" data-save>${icon('save', 18)} Enregistrer</button>`
+               <button class="btn btn--primary" data-save>${icon('save', 18)} Envoyer l'invitation</button>`
     });
     m.foot.querySelector('[data-cancel]').onclick = m.close;
     m.foot.querySelector('[data-save]').onclick = async () => {
-      const projectIds = Array.from(m.body.querySelector('#us-a-projects').selectedOptions).map(o => o.value);
+      const email = m.body.querySelector('#as-email').value.trim();
+      const fullName = m.body.querySelector('#as-name').value.trim();
+      if (!email) { toast('L\'e-mail est obligatoire', 'danger'); return; }
       try {
-        await ERP.Api.admin.users.setProjects(u.id, projectIds);
-        toast('Affectations mises à jour', 'ok');
+        await ERP.Api.assistants.invite({ email, fullName });
+        toast('Invitation envoyée à ' + email, 'ok');
         m.close();
         if (done) done();
       } catch (err) {
@@ -7184,7 +5885,7 @@ window.ERP = window.ERP || {};
     };
   }
 
-  ERP.Router.add('/utilisateurs', { title: 'Utilisateurs', sub: 'Ingénieurs et accès', render: renderList });
+  ERP.Router.add('/assistants', { title: 'Mes assistants', sub: 'Aides invités sur votre entreprise', render: render });
 })(window.ERP);
 
 </script>
@@ -7298,43 +5999,6 @@ window.ERP = window.ERP || {};
     });
     view.querySelector('#s-hours').onchange = (e) => { prefs.dayHours = +e.target.value; };
     view.querySelector('#s-alert').onchange = (e) => { prefs.budgetAlert = +e.target.value; };
-
-    view.querySelector('#apiConnect').onclick = async () => {
-      const url = view.querySelector('#s-url').value.trim().replace(/\/$/, '');
-      if (!/^https?:\/\//.test(url)) { toast('Indiquez une adresse commençant par http:// ou https://', 'danger'); return; }
-      ERP.Api.config.baseUrl = url;
-      ERP.Api.config.token = view.querySelector('#s-token').value.trim() || null;
-      try {
-        const prev = ERP.Api.config.mode;
-        ERP.Api.config.mode = 'http';
-        const meta = await ERP.Api.request('/meta');
-        view.querySelector('#apiBadge').textContent = 'API connectée';
-        view.querySelector('#apiBadge').className = 'badge badge--ok';
-        toast('Connecté au serveur JSON — ' + (meta.counts ? meta.counts.projects + ' projets' : 'OK'), 'ok', 3500);
-        try { localStorage.setItem('batipilot-api', JSON.stringify({ mode: 'http', baseUrl: url })); } catch (_) {}
-      } catch (err) {
-        ERP.Api.config.mode = 'mock';
-        toast('Serveur injoignable : ' + (err.message || err) + ' — reste en mode démo', 'danger', 5000);
-      }
-    };
-    view.querySelector('#apiMock').onclick = () => {
-      if (ERP.Api.useLocalStorage) ERP.Api.useLocalStorage();
-      else ERP.Api.config.mode = 'mock';
-      view.querySelector('#apiBadge').textContent = 'localStorage (navigateur)';
-      view.querySelector('#apiBadge').className = 'badge badge--warn';
-      toast('Mode localStorage activé — les données restent dans le navigateur', 'ok');
-    };
-    view.querySelector('#sReset').onclick = async () => {
-      const ok = await confirm({
-        title: 'Réinitialiser les données ?',
-        text: 'Toutes les modifications enregistrées (pointages, tâches, articles, projets…) seront effacées et le jeu de démonstration d\'origine sera rechargé.',
-        confirmLabel: 'Réinitialiser'
-      });
-      if (ok) {
-        if (ERP.DB.clear) ERP.DB.clear();
-        location.reload();
-      }
-    };
   }
 
   ERP.Router.add('/parametres', { title: 'Paramètres', sub: 'Profil, préférences et connexion', render: renderSettings });
@@ -7416,32 +6080,38 @@ window.ERP = window.ERP || {};
   // chantier en particulier, donc aucun des modules opérationnels ci-dessous
   // ne lui est présenté. Utilisateurs (+ ses propres Paramètres) est tout
   // ce qu'affiche son menu.
+  // Trois rôles : admin (Utilisateurs uniquement), ingénieur (tout, +
+  // gestion de ses assistants), assistant (lecture seule partout sauf
+  // Ouvriers — CRUD complet dans Pointage — imposé côté API/RLS, ces
+  // roles: ne sont qu'un raccourci de navigation).
+  const OPERATIONAL_ROLES = ['ingenieur', 'assistant'];
   const NAV = [
     {
       group: 'Pilotage', items: [
-        { href: '/dashboard', icon: 'home', label: 'Tableau de bord', roles: ['ingenieur'] },
-        { href: '/projets', icon: 'building', label: 'Projets', roles: ['ingenieur'], pill: () => ERP.DB.projects.filter(p => p.status === 'en_retard').length },
-        { href: '/planning', icon: 'calendar', label: 'Planning', roles: ['ingenieur'] },
-        { href: '/taches', icon: 'checkSquare', label: 'Tâches', roles: ['ingenieur'], pill: () => ERP.DB.tasks.filter(t => t.status !== 'termine' && t.due < ERP.DB.today).length }
+        { href: '/dashboard', icon: 'home', label: 'Tableau de bord', roles: OPERATIONAL_ROLES },
+        { href: '/projets', icon: 'building', label: 'Projets', roles: OPERATIONAL_ROLES, pill: () => ERP.DB.projects.filter(p => p.status === 'en_retard').length },
+        { href: '/planning', icon: 'calendar', label: 'Planning', roles: OPERATIONAL_ROLES },
+        { href: '/taches', icon: 'checkSquare', label: 'Tâches', roles: OPERATIONAL_ROLES, pill: () => ERP.DB.tasks.filter(t => t.status !== 'termine' && t.due < ERP.DB.today).length }
       ]
     },
     {
       group: 'Terrain', items: [
-        { href: '/pointage', icon: 'hardhat', label: 'Pointage', roles: ['ingenieur'] },
-        { href: '/articles', icon: 'package', label: 'Articles', roles: ['ingenieur'], pill: () => ERP.DB.articles.filter(a => a.stockStatus !== 'ok').length, muted: true },
-        { href: '/fournisseurs', icon: 'truck', label: 'Fournisseurs', roles: ['ingenieur'] }
+        { href: '/pointage', icon: 'hardhat', label: 'Pointage', roles: OPERATIONAL_ROLES },
+        { href: '/articles', icon: 'package', label: 'Articles', roles: OPERATIONAL_ROLES, pill: () => ERP.DB.articles.filter(a => a.stockStatus !== 'ok').length, muted: true },
+        { href: '/fournisseurs', icon: 'truck', label: 'Fournisseurs', roles: OPERATIONAL_ROLES }
       ]
     },
     {
       group: 'Gestion', items: [
-        { href: '/clients', icon: 'users', label: 'Clients', roles: ['ingenieur'] },
+        { href: '/clients', icon: 'users', label: 'Clients', roles: OPERATIONAL_ROLES },
         { href: '/budgets', icon: 'wallet', label: 'Budgets & coûts', roles: ['ingenieur'] },
         { href: '/rapports', icon: 'chart', label: 'Rapports', roles: ['ingenieur'] }
       ]
     },
     {
       group: 'Système', items: [
-        { href: '/utilisateurs', icon: 'user', label: 'Utilisateurs', roles: ['admin'] },
+        { href: '/utilisateurs', icon: 'user', label: 'Entreprises', roles: ['admin'] },
+        { href: '/assistants', icon: 'users', label: 'Mes assistants', roles: ['ingenieur'] },
         { href: '/parametres', icon: 'settings', label: 'Paramètres' }
       ]
     }
@@ -7682,8 +6352,6 @@ window.ERP = window.ERP || {};
 
   /* ---------- Entrée dans l'application (après connexion) ---------- */
   async function enterApp(session) {
-    ERP.Api.config.mode = 'http';
-    ERP.Api.config.baseUrl = '/api/v1';
     ERP.Api.config.token = session.access_token;
 
     let profile = null;
@@ -7729,6 +6397,11 @@ window.ERP = window.ERP || {};
 
     document.getElementById('authScreen').hidden = true;
     document.getElementById('app').hidden = false;
+
+    // Un assistant est en lecture seule partout sauf sur les ouvriers
+    // (Pointage) — la RLS l'impose côté serveur ; cette classe masque juste
+    // les boutons de création/édition/suppression correspondants côté UI.
+    document.body.classList.toggle('role-assistant', ERP.DB.user.role === 'assistant');
 
     buildNav();
     setupSidebar();

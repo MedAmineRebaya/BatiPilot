@@ -14,13 +14,21 @@ create table if not exists profiles (
   full_name text not null default '',
   initials text not null default '',
   email text not null default '',
-  role text not null default 'ingenieur' check (role in ('admin', 'ingenieur')),
+  role text not null default 'ingenieur' check (role in ('admin', 'ingenieur', 'assistant')),
   phone text not null default '',
   agency text not null default '',
   active boolean not null default true,
   since date not null default current_date,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  -- null for admin; an ingénieur's own id (self — "a company"); an
+  -- assistant's employing ingénieur's id.
+  company_id uuid references profiles(id)
 );
+
+-- Migration for databases created before 'assistant'/company_id existed.
+alter table profiles drop constraint if exists profiles_role_check;
+alter table profiles add constraint profiles_role_check check (role in ('admin', 'ingenieur', 'assistant'));
+alter table profiles add column if not exists company_id uuid references profiles(id);
 
 -- Auto-create a profile row whenever someone signs up (invite or self-signup)
 create or replace function handle_new_user()
@@ -29,12 +37,16 @@ language plpgsql
 security definer set search_path = public
 as $$
 begin
-  insert into profiles (id, email, full_name, initials)
+  insert into profiles (id, email, full_name, initials, company_id)
   values (
     new.id,
     coalesce(new.email, ''),
     coalesce(new.raw_user_meta_data ->> 'full_name', split_part(coalesce(new.email, ''), '@', 1)),
-    upper(left(coalesce(new.raw_user_meta_data ->> 'full_name', new.email, '?'), 1))
+    upper(left(coalesce(new.raw_user_meta_data ->> 'full_name', new.email, '?'), 1)),
+    -- Default: a new account is its own company (ingénieur). The
+    -- assistant-invite endpoint immediately overrides role/company_id
+    -- via the service-role client right after this trigger runs.
+    new.id
   )
   on conflict (id) do nothing;
   return new;
@@ -438,6 +450,259 @@ create policy articles_admin_insert on articles for insert
 drop policy if exists articles_admin_delete on articles;
 create policy articles_admin_delete on articles for delete
   using (is_admin());
+
+-- =========================================================
+-- PHASE 2 — Multi-tenant roles (admin / ingénieur / assistant)
+-- ---------------------------------------------------------
+-- admin:      platform owner. Manages companies (= ingénieur accounts).
+--             No operational data of his own.
+-- ingénieur:  a company. Full CRUD on everything he owns.
+-- assistant:  belongs to exactly one ingénieur (profiles.company_id).
+--             Read-only everywhere his company can see, EXCEPT full
+--             CRUD on the `workers` table of that company.
+-- Re-run safe: every statement is guarded.
+-- =========================================================
+
+-- ---------------------------------------------------------
+-- 1. company_id on tables that can exist before/without a project —
+--    everything else derives its company via project_id → projects.
+-- ---------------------------------------------------------
+alter table projects      add column if not exists company_id uuid references profiles(id);
+alter table workers       add column if not exists company_id uuid references profiles(id);
+alter table clients       add column if not exists company_id uuid references profiles(id);
+alter table articles      add column if not exists company_id uuid references profiles(id);
+alter table suppliers     add column if not exists company_id uuid references profiles(id);
+alter table notifications add column if not exists company_id uuid references profiles(id);
+alter table activity      add column if not exists company_id uuid references profiles(id);
+alter table quotes        add column if not exists company_id uuid references profiles(id);
+
+-- Backfill so nothing already seeded goes orphaned.
+update projects set company_id = coalesce(company_id, created_by);
+update projects p set company_id = (select pm.user_id from project_members pm where pm.project_id = p.id limit 1)
+  where company_id is null;
+update workers w set company_id = (select p.company_id from projects p where p.id = w.project_id)
+  where company_id is null and project_id is not null;
+update clients c set company_id = (
+    select p.company_id from projects p where p.client_id = c.id and p.company_id is not null limit 1
+  ) where company_id is null;
+update quotes q set company_id = (select p.company_id from projects p where p.id = q.project_id)
+  where company_id is null and project_id is not null;
+-- articles / suppliers / notifications / activity: pre-existing seeded
+-- rows had no single owning company (shared demo/reference data in the
+-- old single-tenant model) — left with company_id null, which from here
+-- on means "legacy platform fixture, admin-only" rather than "shared
+-- with everyone" (see the per-table policies below).
+
+-- ---------------------------------------------------------
+-- 2. company-scope helpers
+-- ---------------------------------------------------------
+-- The caller's effective company: their own id if they're an ingénieur
+-- (a company), their employer's id if they're an assistant, null
+-- otherwise (admin, or an inactive/unknown caller).
+create or replace function my_company()
+returns uuid
+language sql
+security definer set search_path = public
+stable
+as $$
+  select case p.role
+    when 'ingenieur' then p.id
+    when 'assistant' then p.company_id
+    else null
+  end
+  from profiles p where p.id = auth.uid() and p.active;
+$$;
+
+create or replace function is_ingenieur()
+returns boolean
+language sql
+security definer set search_path = public
+stable
+as $$
+  select exists (select 1 from profiles where id = auth.uid() and role = 'ingenieur' and active);
+$$;
+
+-- Redefining is_project_member (rather than introducing a new name)
+-- upgrades every existing policy that already calls it — projects,
+-- clients, quotes, and the tasks/timesheets/project_materials/
+-- attachments/expenses loop below — to the company model for free,
+-- including transitively covering assistants (my_company() resolves to
+-- their employer's id). project_members is kept as a secondary path for
+-- backward compatibility with any explicit membership rows.
+create or replace function is_project_member(p_project_id text)
+returns boolean
+language sql
+security definer set search_path = public
+stable
+as $$
+  select
+    exists (select 1 from projects p where p.id = p_project_id and p.company_id = my_company())
+    or exists (
+      select 1 from project_members pm where pm.project_id = p_project_id and pm.user_id = my_company()
+    );
+$$;
+
+-- ---------------------------------------------------------
+-- 3. profiles: an ingénieur may see (not write) his own assistants'
+--    rows; the escalation trigger also protects company_id now (an
+--    assistant re-parenting themselves would grant access to another
+--    company's data).
+-- ---------------------------------------------------------
+drop policy if exists profiles_company_select on profiles;
+create policy profiles_company_select on profiles for select
+  using (is_ingenieur() and company_id = auth.uid());
+
+create or replace function prevent_self_privilege_escalation()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  if auth.uid() is not null and not is_admin()
+     and (new.role is distinct from old.role
+          or new.active is distinct from old.active
+          or new.company_id is distinct from old.company_id) then
+    raise exception 'Seul un administrateur peut modifier le rôle, le statut actif ou le rattachement d''entreprise';
+  end if;
+  return new;
+end;
+$$;
+
+-- ---------------------------------------------------------
+-- 4. projects: creation restricted to an ingénieur (not an assistant,
+--    not just "any active user" as the earlier policy allowed).
+-- ---------------------------------------------------------
+drop policy if exists projects_insert_active on projects;
+drop policy if exists projects_insert_ingenieur on projects;
+create policy projects_insert_ingenieur on projects for insert
+  with check (is_ingenieur() and company_id = auth.uid());
+
+drop policy if exists projects_member_update on projects;
+create policy projects_member_update on projects for update
+  using (is_project_member(id) and is_ingenieur())
+  with check (is_project_member(id) and is_ingenieur());
+
+-- ---------------------------------------------------------
+-- 5. workers: the one table an assistant gets full CRUD on. Scoped by
+--    workers.company_id directly (not the generic project_id-based
+--    pattern below) so an unassigned worker (project_id null) stays
+--    inside its own company instead of being visible to every company.
+-- ---------------------------------------------------------
+drop policy if exists workers_member_all on workers;
+drop policy if exists workers_company_all on workers;
+create policy workers_company_all on workers for all
+  using (company_id is not null and company_id = my_company())
+  with check (company_id is not null and company_id = my_company());
+
+-- ---------------------------------------------------------
+-- 6. tasks / timesheets / project_materials / attachments / expenses:
+--    read for the whole company (ingénieur + assistant); write
+--    restricted to the ingénieur only.
+-- ---------------------------------------------------------
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['tasks', 'timesheets', 'project_materials', 'attachments', 'expenses']
+  loop
+    execute format('drop policy if exists %I_member_all on %I', t, t);
+    execute format('drop policy if exists %I_company_select on %I', t, t);
+    execute format('drop policy if exists %I_company_write on %I', t, t);
+    execute format(
+      'create policy %I_company_select on %I for select using (project_id is not null and is_project_member(project_id))',
+      t, t
+    );
+    execute format(
+      'create policy %I_company_write on %I for all using (project_id is not null and is_project_member(project_id) and is_ingenieur()) with check (project_id is not null and is_project_member(project_id) and is_ingenieur())',
+      t, t
+    );
+  end loop;
+end $$;
+
+-- ---------------------------------------------------------
+-- 7. clients / quotes: company-scoped via their own company_id,
+--    ingénieur-only writes.
+-- ---------------------------------------------------------
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['clients', 'quotes']
+  loop
+    execute format('drop policy if exists %I_member_select on %I', t, t);
+    execute format('drop policy if exists %I_company_select on %I', t, t);
+    execute format('drop policy if exists %I_company_write on %I', t, t);
+    execute format(
+      'create policy %I_company_select on %I for select using (company_id is not null and company_id = my_company())',
+      t, t
+    );
+    execute format(
+      'create policy %I_company_write on %I for all using (company_id is not null and company_id = my_company() and is_ingenieur()) with check (is_ingenieur() and company_id = auth.uid())',
+      t, t
+    );
+  end loop;
+end $$;
+
+-- ---------------------------------------------------------
+-- 8. articles / suppliers: now a per-company stock catalog and
+--    supplier book (no longer a platform-wide shared catalog) — read
+--    for the whole company, write for the ingénieur only. Rows with a
+--    null company_id are legacy platform fixtures, admin-only from
+--    here on.
+-- ---------------------------------------------------------
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['articles', 'suppliers']
+  loop
+    execute format('drop policy if exists %I_read_all on %I', t, t);
+    execute format('drop policy if exists %I_update_all on %I', t, t);
+    execute format('drop policy if exists %I_admin_insert on %I', t, t);
+    execute format('drop policy if exists %I_admin_delete on %I', t, t);
+    execute format('drop policy if exists %I_company_select on %I', t, t);
+    execute format('drop policy if exists %I_company_write on %I', t, t);
+    execute format(
+      'create policy %I_company_select on %I for select using (company_id is not null and company_id = my_company())',
+      t, t
+    );
+    execute format(
+      'create policy %I_company_write on %I for all using (company_id is not null and company_id = my_company() and is_ingenieur()) with check (is_ingenieur() and company_id = auth.uid())',
+      t, t
+    );
+  end loop;
+end $$;
+
+-- ---------------------------------------------------------
+-- 9. notifications / activity: company-scoped read; any company member
+--    may mark a notification read (not sensitive); creation stays
+--    ingénieur-only (admin already has full access via the earlier
+--    *_admin_all policies from Phase 1, untouched here).
+-- ---------------------------------------------------------
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['notifications', 'activity']
+  loop
+    execute format('drop policy if exists %I_member_all on %I', t, t);
+    execute format('drop policy if exists %I_company_select on %I', t, t);
+    execute format('drop policy if exists %I_company_insert on %I', t, t);
+    execute format(
+      'create policy %I_company_select on %I for select using (company_id is not null and company_id = my_company())',
+      t, t
+    );
+    execute format(
+      'create policy %I_company_insert on %I for insert with check (is_ingenieur() and company_id = auth.uid())',
+      t, t
+    );
+  end loop;
+end $$;
+
+drop policy if exists notifications_company_update on notifications;
+create policy notifications_company_update on notifications for update
+  using (company_id is not null and company_id = my_company())
+  with check (company_id is not null and company_id = my_company());
 
 -- =========================================================
 -- Done. Next: run supabase/seed-to-supabase.mjs to load db_seed.json,

@@ -110,6 +110,23 @@ async function requireAdmin(req, res, next) {
   next();
 }
 
+/* Ingénieur = a company. Rejects admin and assistant alike. */
+async function requireIngenieur(req, res, next) {
+  const { data, error } = await req.supa.from('profiles').select('role,active').eq('id', req.userId).single();
+  if (error || !data || data.role !== 'ingenieur' || !data.active) return fail(res, 403, 'forbidden');
+  next();
+}
+
+/* The caller's effective company: their own id if ingénieur, their
+   employer's id if assistant. Mirrors my_company() in schema.sql — used
+   server-side wherever we must stamp company_id on a new row (RLS's
+   WITH CHECK enforces it's correct, this just computes what to send). */
+async function getCallerCompany(supa, userId) {
+  const { data, error } = await supa.from('profiles').select('role,company_id').eq('id', userId).single();
+  if (error || !data) throw new Error('profile_not_found');
+  return data.role === 'assistant' ? data.company_id : userId;
+}
+
 function throwIfError({ error }) {
   if (error) throw error;
 }
@@ -394,7 +411,7 @@ api.post('/projects', async (req, res, next) => {
     const id = await nextId('projects', 'PRJ-');
     const row = {
       id, ref: 'CHT-' + today().slice(0, 4) + '-' + id.slice(4),
-      spent: 0, progress: 0, status: 'en_preparation', created_by: req.userId,
+      spent: 0, progress: 0, status: 'en_preparation', created_by: req.userId, company_id: req.userId,
       ...snakeize(body)
     };
     const phaseTaskIds = await Promise.all(picked.map(() => nextId('tasks', 'TSK-')));
@@ -466,7 +483,7 @@ api.get('/clients/:id', async (req, res, next) => {
 api.post('/clients', async (req, res, next) => {
   try {
     const id = await nextId('clients', 'CLI-');
-    const row = { id, status: 'actif', since: today(), city: 'Tunis', ...snakeize(req.body || {}) };
+    const row = { id, status: 'actif', since: today(), city: 'Tunis', ...snakeize(req.body || {}), company_id: req.userId };
     throwIfError(await req.supa.from('clients').insert(row));
     ok(res, await decorateClient(req.supa, row), 201);
   } catch (e) { next(e); }
@@ -517,7 +534,8 @@ api.get('/workers/:id', async (req, res, next) => {
 api.post('/workers', async (req, res, next) => {
   try {
     const id = await nextId('workers', 'OUV-');
-    const row = { id, trade: 'Maçon', rate: 15, status: 'actif', since: today(), ...snakeize(req.body || {}) };
+    const companyId = await getCallerCompany(req.supa, req.userId);
+    const row = { id, trade: 'Maçon', rate: 15, status: 'actif', since: today(), ...snakeize(req.body || {}), company_id: companyId };
     throwIfError(await req.supa.from('workers').insert(row));
     ok(res, await decorateWorker(req.supa, row), 201);
   } catch (e) { next(e); }
@@ -651,7 +669,7 @@ api.post('/articles', async (req, res, next) => {
     const stockStatus = body.stock === 0 ? 'rupture' : body.stock < body.min ? 'faible' : 'ok';
     const row = {
       id, ref: 'MAT-' + id.slice(4), location: 'Dépôt central Tunis', last_entry: today(),
-      ...snakeize(body), stock_status: stockStatus
+      ...snakeize(body), stock_status: stockStatus, company_id: req.userId
     };
     throwIfError(await req.supa.from('articles').insert(row));
     ok(res, row, 201);
@@ -850,7 +868,7 @@ api.post('/suppliers', async (req, res, next) => {
     const id = await nextId('suppliers', 'FRN-');
     const row = {
       id, since: today(), status: 'actif', featured: [], rating: 4, lead_days: 3,
-      tax_id: '', payment: '30 jours fin de mois', note: '', ...snakeize(req.body || {})
+      tax_id: '', payment: '30 jours fin de mois', note: '', ...snakeize(req.body || {}), company_id: req.userId
     };
     throwIfError(await req.supa.from('suppliers').insert(row));
     ok(res, row, 201);
@@ -979,7 +997,7 @@ api.post('/quotes', async (req, res, next) => {
     const body = req.body || {};
     const row = {
       id, date: today(), status: 'en_attente', project_id: null, ...snakeize(body),
-      total: (body.lines || []).reduce((s, l) => s + l.qty * l.price, 0)
+      total: (body.lines || []).reduce((s, l) => s + l.qty * l.price, 0), company_id: req.userId
     };
     throwIfError(await req.supa.from('quotes').insert(row));
     ok(res, row, 201);
@@ -1146,6 +1164,111 @@ api.get('/search', async (req, res, next) => {
 });
 
 /* =========================================================
+   Jeu de démonstration par entreprise — un petit jeu de données
+   réaliste mais totalement isolé (company_id = l'ingénieur cible),
+   pour qu'un admin puisse montrer l'application sans mélanger les
+   données d'une entreprise avec celles d'une autre.
+   ========================================================= */
+async function seedDemoDataForCompany(companyId, companyLabel) {
+  const t = today();
+  const clientId = await nextId('clients', 'CLI-');
+  const client = {
+    id: clientId, company_id: companyId, contact: 'Karim Belhassen', company: 'Groupe Belhassen Immobilier',
+    city: 'Tunis', phone: '+216 71 200 300', email: 'contact@belhassen-immo.tn', status: 'actif',
+    since: t, address: 'Avenue Mohamed V, Tunis'
+  };
+  throwIfError(await adminClient.from('clients').insert(client));
+
+  const supplierId = await nextId('suppliers', 'FRN-');
+  const supplier = {
+    id: supplierId, company_id: companyId, company: 'Matériaux du Centre', contact: 'Sana Jebali',
+    phone: '+216 73 400 500', email: 'ventes@materiaux-centre.tn', address: 'Zone industrielle, Sousse',
+    city: 'Sousse', specialty: 'Matériaux généraux', lead_days: 3, rating: 4.2, tax_id: '1300000/A/M/000',
+    payment: '30 jours fin de mois', since: t, status: 'actif', featured: [], note: ''
+  };
+  throwIfError(await adminClient.from('suppliers').insert(supplier));
+
+  const ARTICLE_DEFS = [
+    ['Ciment CEM II 25 kg', 'Gros œuvre', 'sac', 150, 100, 12.5],
+    ['Sable de carrière', 'Gros œuvre', 'm³', 40, 20, 38],
+    ['Fer à béton Ø10', 'Ferraillage', 'barre', 120, 80, 19.6],
+    ['Câble 3G2,5 (couronne 100 m)', 'Électricité', 'couronne', 15, 10, 186],
+    ['Tube PVC Ø50 (4 m)', 'Plomberie', 'barre', 60, 30, 17.5],
+    ['Peinture acrylique blanche 20 L', 'Finition', 'seau', 20, 12, 128]
+  ];
+  const articles = [];
+  for (const [name, category, unit, stock, min, price] of ARTICLE_DEFS) {
+    const id = await nextId('articles', 'ART-');
+    articles.push({
+      id, company_id: companyId, ref: 'MAT-' + id.slice(4), name, category, unit, stock, min, price,
+      supplier: supplier.company, supplier_id: supplierId, location: 'Dépôt central', last_entry: t,
+      stock_status: stock === 0 ? 'rupture' : stock < min ? 'faible' : 'ok'
+    });
+  }
+  throwIfError(await adminClient.from('articles').insert(articles));
+
+  const WORKER_DEFS = [
+    ['Sami Ferjani', 'Chef d\'équipe', 22], ['Mounir Ayari', 'Maçon', 16],
+    ['Rania Ghariani', 'Électricienne', 19], ['Bilel Souissi', 'Plombier', 19],
+    ['Wael Nasri', 'Manœuvre', 12]
+  ];
+  const workers = [];
+  for (const [name, trade, rate] of WORKER_DEFS) {
+    const id = await nextId('workers', 'OUV-');
+    workers.push({
+      id, company_id: companyId, matricule: 'M' + (2000 + workers.length), name, trade, rate,
+      cnss: 'CNSS-' + (90000 + workers.length * 17), since: t, contract: 'Journalier', status: 'actif'
+    });
+  }
+  throwIfError(await adminClient.from('workers').insert(workers));
+
+  const PROJECT_DEFS = [
+    { name: 'Résidence ' + (companyLabel || 'Le Jardin'), city: 'Tunis', budget: 180000, progress: 35, status: 'en_cours' },
+    { name: 'Villa Les Oliviers', city: 'Sousse', budget: 95000, progress: 8, status: 'en_preparation' }
+  ];
+  const TASK_DEFS = ['Installation de chantier', 'Fondations et semelles', 'Maçonnerie et cloisons'];
+  for (const [i, pd] of PROJECT_DEFS.entries()) {
+    const pid = await nextId('projects', 'PRJ-');
+    workers[i % workers.length].project_id = pid;
+    workers[(i + 1) % workers.length].project_id = pid;
+    const phases = [];
+    const taskRows = [];
+    let start = dt.add(t, -20 + i * 5);
+    for (const title of TASK_DEFS) {
+      const tid = await nextId('tasks', 'TSK-');
+      const due = dt.add(start, 12);
+      const progress = pd.status === 'en_preparation' ? 0 : Math.max(0, 100 - (TASK_DEFS.indexOf(title) * 35));
+      phases.push({ taskId: tid, name: title, start, end: due, progress, lead: workers[i % workers.length].name });
+      taskRows.push({
+        id: tid, project_id: pid, title, assignee: workers[i % workers.length].name, priority: 'moyenne',
+        start, due, progress, status: progress === 100 ? 'termine' : progress > 0 ? 'en_cours' : 'a_faire', created_at: t
+      });
+      start = dt.add(due, 1);
+    }
+    throwIfError(await adminClient.from('projects').insert({
+      id: pid, company_id: companyId, created_by: companyId, ref: 'CHT-' + t.slice(0, 4) + '-' + pid.slice(4),
+      name: pd.name, client_id: clientId, address: pd.city, city: pd.city, manager: workers[i % workers.length].name,
+      start: dt.add(t, -25), end: dt.add(t, 150), status: pd.status, progress: pd.progress,
+      budget: pd.budget, spent: Math.round(pd.budget * pd.progress / 100), type: 'Projet de démonstration',
+      phases
+    }));
+    throwIfError(await adminClient.from('project_members').upsert({ project_id: pid, user_id: companyId }));
+    if (taskRows.length) throwIfError(await adminClient.from('tasks').insert(taskRows));
+
+    const matId = 'AFF-' + pid + '-01';
+    throwIfError(await adminClient.from('project_materials').insert({
+      id: matId, project_id: pid, article_id: articles[i % articles.length].id, qty: 20, date: t,
+      note: 'Dotation initiale', author: companyLabel || 'Chef de projet'
+    }));
+  }
+  throwIfError(await adminClient.from('workers').upsert(workers));
+
+  throwIfError(await adminClient.from('activity').insert([
+    { company_id: companyId, icon: 'building', tone: 'info', title: 'Chantier ouvert — ' + PROJECT_DEFS[0].name, meta: client.company, time: t }
+  ]));
+}
+
+/* =========================================================
    Admin — gestion des utilisateurs (clé service role)
    ========================================================= */
 const admin = express.Router();
@@ -1164,18 +1287,25 @@ admin.get('/users', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+// Invites a new company (ingénieur, the default) or, with role:'assistant'
+// + companyId, an assistant under an existing company — admin can manage
+// both from the same "Entreprises" screen.
 admin.post('/users/invite', async (req, res, next) => {
   try {
-    const { email, fullName, projectIds } = req.body || {};
+    const { email, fullName, projectIds, role, companyId } = req.body || {};
     if (!email) return fail(res, 400, 'email_required');
     if (!isAllowedDomain(email)) return fail(res, 400, `Utilisez une adresse e-mail @${ALLOWED_SIGNUP_DOMAIN}.`);
+    if (role === 'assistant' && !companyId) return fail(res, 400, 'companyId_required');
     const { data, error } = await adminClient.auth.admin.inviteUserByEmail(email, {
       data: { full_name: fullName || '' }
     });
     if (error) throw error;
     const userId = data.user.id;
-    if (fullName) await adminClient.from('profiles').update({ full_name: fullName }).eq('id', userId);
-    if (Array.isArray(projectIds) && projectIds.length) {
+    const patch = {};
+    if (fullName) patch.full_name = fullName;
+    if (role === 'assistant') { patch.role = 'assistant'; patch.company_id = companyId; }
+    if (Object.keys(patch).length) await adminClient.from('profiles').update(patch).eq('id', userId);
+    if (role !== 'assistant' && Array.isArray(projectIds) && projectIds.length) {
       throwIfError(await adminClient.from('project_members').insert(projectIds.map((pid) => ({ project_id: pid, user_id: userId }))));
     }
     ok(res, { id: userId, email }, 201);
@@ -1204,7 +1334,59 @@ admin.post('/users/:id/projects', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+admin.post('/users/:id/demo-seed', async (req, res, next) => {
+  try {
+    const { data: profile } = await adminClient.from('profiles').select('role,full_name').eq('id', req.params.id).maybeSingle();
+    if (!profile) return fail(res, 404, 'not_found');
+    if (profile.role !== 'ingenieur') return fail(res, 400, 'seed_target_must_be_ingenieur');
+    const { count } = await adminClient.from('projects').select('id', { count: 'exact', head: true }).eq('company_id', req.params.id);
+    if (count > 0) return fail(res, 400, 'company_already_has_data');
+    await seedDemoDataForCompany(req.params.id, profile.full_name);
+    ok(res, { ok: true }, 201);
+  } catch (e) { next(e); }
+});
+
 api.use('/admin', admin);
+
+/* ---- Assistants — gérés par l'ingénieur lui-même (ou par l'admin via
+   /admin/users/invite avec role:'assistant'). Toujours via le client
+   service role : un ingénieur n'a pas le privilège auth.admin, donc le
+   serveur agit en son nom une fois son rôle vérifié. ---- */
+api.get('/assistants', requireIngenieur, async (req, res, next) => {
+  try {
+    const { data, error } = await adminClient.from('profiles').select('*').eq('company_id', req.userId).eq('role', 'assistant');
+    if (error) throw error;
+    ok(res, data || []);
+  } catch (e) { next(e); }
+});
+
+api.post('/assistants/invite', requireIngenieur, async (req, res, next) => {
+  try {
+    const { email, fullName } = req.body || {};
+    if (!email) return fail(res, 400, 'email_required');
+    if (!isAllowedDomain(email)) return fail(res, 400, `Utilisez une adresse e-mail @${ALLOWED_SIGNUP_DOMAIN}.`);
+    const { data, error } = await adminClient.auth.admin.inviteUserByEmail(email, {
+      data: { full_name: fullName || '' }
+    });
+    if (error) throw error;
+    const patch = { role: 'assistant', company_id: req.userId };
+    if (fullName) patch.full_name = fullName;
+    await adminClient.from('profiles').update(patch).eq('id', data.user.id);
+    ok(res, { id: data.user.id, email }, 201);
+  } catch (e) { next(e); }
+});
+
+api.patch('/assistants/:id', requireIngenieur, async (req, res, next) => {
+  try {
+    const { data: target } = await adminClient.from('profiles').select('company_id,role').eq('id', req.params.id).maybeSingle();
+    if (!target || target.role !== 'assistant' || target.company_id !== req.userId) return fail(res, 404, 'not_found');
+    const patch = snakeize(req.body || {});
+    delete patch.id; delete patch.role; delete patch.company_id; delete patch.email;
+    const { data, error } = await adminClient.from('profiles').update(patch).eq('id', req.params.id).select().maybeSingle();
+    if (error) throw error;
+    ok(res, data);
+  } catch (e) { next(e); }
+});
 
 /* ---- Racine ---- */
 api.get('/', (req, res) => {
