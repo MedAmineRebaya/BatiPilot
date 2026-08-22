@@ -589,6 +589,15 @@ create policy projects_member_update on projects for update
   using (is_project_member(id) and is_ingenieur())
   with check (is_project_member(id) and is_ingenieur());
 
+-- No delete policy existed for the ingénieur role at all (only
+-- projects_admin_all covered delete) — DELETE /api/v1/projects/:id ran
+-- through the caller's own RLS-scoped client, so an ingénieur deleting
+-- their own project silently affected 0 rows: no error, but the project
+-- was still there after the "Projet supprimé" toast.
+drop policy if exists projects_company_delete on projects;
+create policy projects_company_delete on projects for delete
+  using (is_project_member(id) and is_ingenieur());
+
 -- ---------------------------------------------------------
 -- 5. workers: the one table an assistant gets full CRUD on. Scoped by
 --    workers.company_id directly (not the generic project_id-based
