@@ -487,11 +487,18 @@ update clients c set company_id = (
   ) where company_id is null;
 update quotes q set company_id = (select p.company_id from projects p where p.id = q.project_id)
   where company_id is null and project_id is not null;
--- articles / suppliers / notifications / activity: pre-existing seeded
--- rows had no single owning company (shared demo/reference data in the
--- old single-tenant model) — left with company_id null, which from here
--- on means "legacy platform fixture, admin-only" rather than "shared
--- with everyone" (see the per-table policies below).
+update notifications n set company_id = (select p.company_id from projects p where p.id = n.project_id)
+  where company_id is null and project_id is not null;
+update activity a set company_id = (select p.company_id from projects p where p.id = a.project_id)
+  where company_id is null and project_id is not null;
+-- articles / suppliers: no project_id to backfill from at all (shared
+-- demo/reference data in the old single-tenant model) — left with
+-- company_id null, which from here on means "legacy platform fixture,
+-- admin-only" rather than "shared with everyone" (see policies below).
+-- Same applies to any notification/activity row with a null project_id
+-- (company-wide alerts, e.g. stock/attendance) — there's no signal to
+-- attribute those to a company automatically; re-create them per-company
+-- (or set company_id by hand) after the migration if you need them back.
 
 -- ---------------------------------------------------------
 -- 2. company-scope helpers
