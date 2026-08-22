@@ -461,6 +461,18 @@ table.tbl .cell-sub{ font-size:12.5px; color:var(--muted); }
 .field.has-error input,.field.has-error select{ border-color:var(--danger); }
 .field__err{ font-size:12.5px; color:var(--danger); font-weight:600; }
 
+.pwd-wrap{ position:relative; }
+.pwd-wrap input{ padding-right:44px; }
+.pwd-toggle{
+  position:absolute; right:4px; top:50%; transform:translateY(-50%);
+  width:34px; height:34px; display:flex; align-items:center; justify-content:center;
+  border:0; background:none; color:var(--faint); cursor:pointer; border-radius:var(--r);
+}
+.pwd-toggle:hover{ color:var(--muted); background:var(--bg); }
+.pwd-toggle .eye-off{ display:none; }
+.pwd-toggle.is-visible .eye{ display:none; }
+.pwd-toggle.is-visible .eye-off{ display:block; }
+
 /* Modales */
 .modal-scrim{
   position:fixed; inset:0; background:rgba(14,34,51,.5); backdrop-filter:blur(3px);
@@ -1112,7 +1124,13 @@ body.role-assistant .write-guard{ display:none !important; }
       <div class="field field--full"><label for="auth-email">E-mail</label>
         <input id="auth-email" type="email" autocomplete="username" required></div>
       <div class="field field--full"><label for="auth-password">Mot de passe</label>
-        <input id="auth-password" type="password" autocomplete="current-password" minlength="6" required></div>
+        <div class="pwd-wrap">
+          <input id="auth-password" type="password" autocomplete="current-password" minlength="6" required>
+          <button type="button" class="pwd-toggle" data-pwd-for="auth-password" aria-label="Afficher le mot de passe" aria-pressed="false">
+            <svg class="eye" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 12S6 6.2 12 6.2 21.4 12 21.4 12 18 17.8 12 17.8 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.9"/></svg>
+            <svg class="eye-off" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 12S6 6.2 12 6.2c1.3 0 2.5.2 3.6.6M21.4 12S19.7 15 16.7 16.8M9.5 14.5a2.9 2.9 0 0 0 4.1-4.1"/><path d="M3 3l18 18"/></svg>
+          </button>
+        </div></div>
       <p class="auth-error" id="authError" hidden></p>
       <p class="auth-ok" id="authOk" hidden></p>
       <button class="btn btn--primary btn--block" type="submit">Se connecter</button>
@@ -1123,7 +1141,13 @@ body.role-assistant .write-guard{ display:none !important; }
       <div class="field field--full"><label for="signup-email">E-mail (@batipilot.tn)</label>
         <input id="signup-email" type="email" placeholder="prenom.nom@batipilot.tn" autocomplete="username" required></div>
       <div class="field field--full"><label for="signup-password">Mot de passe</label>
-        <input id="signup-password" type="password" autocomplete="new-password" minlength="6" required></div>
+        <div class="pwd-wrap">
+          <input id="signup-password" type="password" autocomplete="new-password" minlength="6" required>
+          <button type="button" class="pwd-toggle" data-pwd-for="signup-password" aria-label="Afficher le mot de passe" aria-pressed="false">
+            <svg class="eye" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 12S6 6.2 12 6.2 21.4 12 21.4 12 18 17.8 12 17.8 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.9"/></svg>
+            <svg class="eye-off" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 12S6 6.2 12 6.2c1.3 0 2.5.2 3.6.6M21.4 12S19.7 15 16.7 16.8M9.5 14.5a2.9 2.9 0 0 0 4.1-4.1"/><path d="M3 3l18 18"/></svg>
+          </button>
+        </div></div>
       <p class="auth-error" id="signupError" hidden></p>
       <button class="btn btn--primary btn--block" type="submit">Créer mon compte</button>
     </form>
@@ -6300,6 +6324,17 @@ window.ERP = window.ERP || {};
   }
 
   function wireAuthForm() {
+    document.querySelectorAll('[data-pwd-for]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const input = document.getElementById(btn.dataset.pwdFor);
+        const show = input.type === 'password';
+        input.type = show ? 'text' : 'password';
+        btn.classList.toggle('is-visible', show);
+        btn.setAttribute('aria-pressed', String(show));
+        btn.setAttribute('aria-label', show ? 'Masquer le mot de passe' : 'Afficher le mot de passe');
+      });
+    });
+
     document.getElementById('authForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       const email = document.getElementById('auth-email').value.trim();
