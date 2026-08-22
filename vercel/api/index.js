@@ -80,14 +80,25 @@ const isLate = (t) => t.status !== 'termine' && t.due && t.due < today();
    pour éviter les collisions entre utilisateurs qui ne voient
    chacun qu'une partie des lignes via RLS) ---------- */
 async function nextId(table, prefix, pad = 3) {
+  const [id] = await nextIds(table, prefix, 1, pad);
+  return id;
+}
+
+// Allocates `count` sequential ids in one table scan. Needed whenever a
+// caller wants several ids from the same table before any of them is
+// actually inserted (e.g. building an array of rows for a single batch
+// insert) — calling nextId() in a loop in that situation reads the same
+// "current max" every time and hands back the same id repeatedly, since
+// nothing new has been inserted yet for it to see.
+async function nextIds(table, prefix, count, pad = 3) {
   const { data, error } = await adminClient.from(table).select('id');
   if (error) throw error;
   const nums = (data || []).map((r) => {
     const m = String(r.id || '').match(/(\d+)$/);
     return m ? parseInt(m[1], 10) : 0;
   });
-  const n = (nums.length ? Math.max(...nums) : 0) + 1;
-  return prefix + String(n).padStart(pad, '0');
+  const start = (nums.length ? Math.max(...nums) : 0) + 1;
+  return Array.from({ length: count }, (_, i) => prefix + String(start + i).padStart(pad, '0'));
 }
 
 /* ---------- Auth middleware ---------- */
@@ -1196,15 +1207,15 @@ async function seedDemoDataForCompany(companyId, companyLabel) {
     ['Tube PVC Ø50 (4 m)', 'Plomberie', 'barre', 60, 30, 17.5],
     ['Peinture acrylique blanche 20 L', 'Finition', 'seau', 20, 12, 128]
   ];
-  const articles = [];
-  for (const [name, category, unit, stock, min, price] of ARTICLE_DEFS) {
-    const id = await nextId('articles', 'ART-');
-    articles.push({
+  const articleIds = await nextIds('articles', 'ART-', ARTICLE_DEFS.length);
+  const articles = ARTICLE_DEFS.map(([name, category, unit, stock, min, price], i) => {
+    const id = articleIds[i];
+    return {
       id, company_id: companyId, ref: 'MAT-' + id.slice(4), name, category, unit, stock, min, price,
       supplier: supplier.company, supplier_id: supplierId, location: 'Dépôt central', last_entry: t,
       stock_status: stock === 0 ? 'rupture' : stock < min ? 'faible' : 'ok'
-    });
-  }
+    };
+  });
   throwIfError(await adminClient.from('articles').insert(articles));
 
   const WORKER_DEFS = [
@@ -1212,14 +1223,11 @@ async function seedDemoDataForCompany(companyId, companyLabel) {
     ['Rania Ghariani', 'Électricienne', 19], ['Bilel Souissi', 'Plombier', 19],
     ['Wael Nasri', 'Manœuvre', 12]
   ];
-  const workers = [];
-  for (const [name, trade, rate] of WORKER_DEFS) {
-    const id = await nextId('workers', 'OUV-');
-    workers.push({
-      id, company_id: companyId, matricule: 'M' + (2000 + workers.length), name, trade, rate,
-      cnss: 'CNSS-' + (90000 + workers.length * 17), since: t, contract: 'Journalier', status: 'actif'
-    });
-  }
+  const workerIds = await nextIds('workers', 'OUV-', WORKER_DEFS.length);
+  const workers = WORKER_DEFS.map(([name, trade, rate], i) => ({
+    id: workerIds[i], company_id: companyId, matricule: 'M' + (2000 + i), name, trade, rate,
+    cnss: 'CNSS-' + (90000 + i * 17), since: t, contract: 'Journalier', status: 'actif'
+  }));
   throwIfError(await adminClient.from('workers').insert(workers));
 
   const PROJECT_DEFS = [
@@ -1234,8 +1242,9 @@ async function seedDemoDataForCompany(companyId, companyLabel) {
     const phases = [];
     const taskRows = [];
     let start = dt.add(t, -20 + i * 5);
-    for (const title of TASK_DEFS) {
-      const tid = await nextId('tasks', 'TSK-');
+    const taskIds = await nextIds('tasks', 'TSK-', TASK_DEFS.length);
+    for (const [ti, title] of TASK_DEFS.entries()) {
+      const tid = taskIds[ti];
       const due = dt.add(start, 12);
       const progress = pd.status === 'en_preparation' ? 0 : Math.max(0, 100 - (TASK_DEFS.indexOf(title) * 35));
       phases.push({ taskId: tid, name: title, start, end: due, progress, lead: workers[i % workers.length].name });
