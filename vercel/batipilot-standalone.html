@@ -1292,8 +1292,21 @@ window.ERP = window.ERP || {};
     token: null
   };
 
+  // A single in-flight refresh shared by every caller that hits a 401 at
+  // once (e.g. a page that fires several requests in parallel right after
+  // the tab wakes up with a stale token) — without this, each of them
+  // would kick off its own refreshSession() call concurrently.
+  let refreshInFlight = null;
+  function refreshTokenOnce() {
+    if (!refreshInFlight) {
+      refreshInFlight = (window.ERP.Auth ? window.ERP.Auth.refreshSession() : Promise.reject(new Error('no auth')))
+        .finally(() => { refreshInFlight = null; });
+    }
+    return refreshInFlight;
+  }
+
   /* --- Point d'entrée unique de tous les appels API --- */
-  async function request(resource, { method = 'GET', params = null, body = null } = {}) {
+  async function request(resource, { method = 'GET', params = null, body = null } = {}, _retried = false) {
     const base = config.baseUrl.replace(/\/$/, '');
     const url = new URL(base + resource, location.origin);
     if (params) Object.entries(params).forEach(([k, v]) => v != null && url.searchParams.set(k, v));
@@ -1305,6 +1318,23 @@ window.ERP = window.ERP || {};
       },
       body: body ? JSON.stringify(body) : undefined
     });
+    if (res.status === 401 && !_retried) {
+      // The token expired mid-session (typically after the tab sat in the
+      // background long enough for the access token to lapse before the
+      // SDK's own background timer refreshed it). Try ONE silent refresh
+      // and replay this exact request — do not treat a single 401 as a
+      // dead session; only a real SIGNED_OUT event (see app.js) does that.
+      console.warn(`[api] 401 on ${resource} — attempting a silent token refresh`);
+      try {
+        const session = await refreshTokenOnce();
+        if (session) {
+          config.token = session.access_token;
+          return request(resource, { method, params, body }, true);
+        }
+      } catch (refreshErr) {
+        console.warn('[api] silent token refresh failed', refreshErr);
+      }
+    }
     if (!res.ok) {
       let detail = res.statusText;
       try { const j = await res.json(); if (j && j.error) detail = j.error; } catch (_) {}
@@ -2030,12 +2060,29 @@ window.ERP = window.ERP || {};
   }
 
   function go(to) {
+    // An empty/falsy target must never reach location.hash: '#' + '' is '#',
+    // which path() treats as "no route" and silently falls back to the
+    // default landing page — i.e. an unrelated click (e.g. a notification
+    // with no link) would bounce the user to the dashboard from wherever
+    // they were. Guard here once instead of at every call site.
+    if (!to) { console.warn('[router] go() called with an empty target — ignored'); return; }
     if (location.hash === '#' + to) resolve();
     else location.hash = to;
   }
 
+  let started = false;
   function start(cb) {
     onChange = cb;
+    if (started) {
+      // Re-entering an already-started router (e.g. a second enterApp()
+      // call) must not attach a second hashchange listener — that would
+      // double-render every future navigation. Just refresh the callback
+      // and re-resolve the current route instead.
+      console.warn('[router] start() called again — reusing the existing listener');
+      resolve();
+      return;
+    }
+    started = true;
     window.addEventListener('hashchange', resolve);
     resolve();
   }
@@ -6060,6 +6107,16 @@ window.ERP = window.ERP || {};
     return res.data.session || null;
   }
 
+  // Explicit, on-demand refresh — used by the API layer to recover from a
+  // single 401 (e.g. the access token expired while the tab was
+  // backgrounded and the SDK's own background timer hadn't caught up yet)
+  // without waiting for the next automatic refresh cycle.
+  async function refreshSession() {
+    var res = await client.auth.refreshSession();
+    if (res.error) throw res.error;
+    return res.data.session;
+  }
+
   async function fetchProfile(userId) {
     var res = await client.from('profiles').select('*').eq('id', userId).single();
     if (res.error) throw res.error;
@@ -6084,7 +6141,7 @@ window.ERP = window.ERP || {};
     return body;
   }
 
-  ERP.Auth = { client: client, signIn: signIn, signUp: signUp, signOut: signOut, getSession: getSession, fetchProfile: fetchProfile, onAuthStateChange: onAuthStateChange };
+  ERP.Auth = { client: client, signIn: signIn, signUp: signUp, signOut: signOut, getSession: getSession, refreshSession: refreshSession, fetchProfile: fetchProfile, onAuthStateChange: onAuthStateChange };
 })(window.ERP);
 
 </script>
@@ -6211,7 +6268,9 @@ window.ERP = window.ERP || {};
     on(p, 'click', '[data-link]', async (e, t) => {
       await ERP.Api.notifications.markRead(t.dataset.id);
       refreshHeader(); closePopover();
-      ERP.Router.go(t.dataset.link.replace(/^#/, ''));
+      // Company-wide notifications (stock/attendance alerts) legitimately
+      // have no target — only navigate when there actually is one.
+      if (t.dataset.link) ERP.Router.go(t.dataset.link.replace(/^#/, ''));
     });
   }
 
@@ -6389,10 +6448,30 @@ window.ERP = window.ERP || {};
   async function enterApp(session) {
     ERP.Api.config.token = session.access_token;
 
-    let profile = null;
-    try { profile = await ERP.Auth.fetchProfile(session.user.id); } catch (_) {}
+    // fetchProfile() can fail for reasons that have nothing to do with
+    // approval — a network blip, a cold RLS/connection hiccup right after
+    // sign-in. Only a genuinely fetched profile with active:false means
+    // "not approved" (the self-select policy lets a user read their own
+    // row regardless of active). Any other failure gets one retry before
+    // giving up, and never signs the user out on its own — a real invalid
+    // session is reported by Supabase itself via the SIGNED_OUT event.
+    let profile;
+    try {
+      profile = await ERP.Auth.fetchProfile(session.user.id);
+    } catch (err) {
+      console.warn('[auth] fetchProfile failed, retrying once…', err);
+      await new Promise((r) => setTimeout(r, 800));
+      try {
+        profile = await ERP.Auth.fetchProfile(session.user.id);
+      } catch (err2) {
+        console.warn('[auth] fetchProfile retry also failed — treating as transient, not signing out', err2);
+        showLogin('Connexion au serveur impossible pour le moment. Réessayez.');
+        return;
+      }
+    }
 
-    if (!profile || !profile.active) {
+    if (!profile.active) {
+      console.warn('[auth] profile.active is false — signing out');
       await ERP.Auth.signOut();
       showLogin('Votre compte n\'est pas encore approuvé par un administrateur.');
       return;
@@ -6474,14 +6553,49 @@ window.ERP = window.ERP || {};
     // Chaque déconnexion gère elle-même sa transition d'écran (voir
     // openUserMenu et le contrôle de compte non approuvé dans enterApp) —
     // pas de rechargement automatique ici, qui écraserait un message affiché.
+    // SIGNED_OUT est le SEUL événement qui renvoie vers l'écran de
+    // connexion depuis ici : c'est Supabase lui-même qui déclare la
+    // session définitivement morte (jeton de rafraîchissement révoqué/
+    // expiré), pas une simple requête API en échec (voir js/api.js, qui
+    // tente déjà un rafraîchissement silencieux avant d'abandonner).
     ERP.Auth.onAuthStateChange((event, session) => {
-      if (event === 'TOKEN_REFRESHED' && session) ERP.Api.config.token = session.access_token;
+      if (event === 'TOKEN_REFRESHED' && session) {
+        console.warn('[auth] token silently refreshed');
+        ERP.Api.config.token = session.access_token;
+      }
+      if (event === 'SIGNED_OUT') {
+        console.warn('[auth] SIGNED_OUT — session is really gone, returning to login');
+        ERP.DB.user = null;
+        showLogin();
+      }
     });
 
-    ERP.Auth.getSession().then((session) => {
-      if (session) enterApp(session);
-      else showLogin();
+    // Un onglet remis au premier plan après une longue mise en veille peut
+    // avoir manqué le cycle de rafraîchissement automatique du SDK (les
+    // timers sont limités/suspendus en arrière-plan par le navigateur).
+    // On resynchronise juste le jeton ici — jamais de re-rendu, de
+    // navigation ni de déconnexion : la prochaine requête API a de toute
+    // façon son propre repli si ce n'est pas suffisant.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible' || !ERP.DB.user) return;
+      ERP.Auth.getSession()
+        .then((session) => { if (session) ERP.Api.config.token = session.access_token; })
+        .catch((err) => console.warn('[auth] visibility token sync failed (ignored)', err));
     });
+
+    function tryEnter(session, retriedOnNull) {
+      if (session) { enterApp(session); return; }
+      if (!retriedOnNull) {
+        // getSession() can briefly return nothing while the SDK is still
+        // restoring a persisted session from storage on first load — one
+        // short re-check avoids flashing the login screen for that.
+        setTimeout(() => ERP.Auth.getSession().then((s) => tryEnter(s, true)), 300);
+        return;
+      }
+      showLogin();
+    }
+
+    ERP.Auth.getSession().then((session) => tryEnter(session, false));
   }
 
   ERP.App = { refreshHeader, buildNav };
