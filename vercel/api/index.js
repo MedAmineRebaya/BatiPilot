@@ -425,7 +425,11 @@ api.post('/projects', async (req, res, next) => {
       spent: 0, progress: 0, status: 'en_preparation', created_by: req.userId, company_id: req.userId,
       ...snakeize(body)
     };
-    const phaseTaskIds = await Promise.all(picked.map(() => nextId('tasks', 'TSK-')));
+    // nextId() derives "next" from a fresh table scan every call — calling
+    // it once per picked task via Promise.all() runs them concurrently, so
+    // every one reads the same "current max" and they all come back with
+    // the identical id. nextIds() allocates the whole batch from one scan.
+    const phaseTaskIds = await nextIds('tasks', 'TSK-', picked.length || 0);
     row.phases = picked.map((t, i) => ({
       taskId: phaseTaskIds[i], name: t.name, start: t.start, end: t.end, progress: 0, lead: t.assignee || row.manager
     }));
@@ -733,6 +737,20 @@ api.post('/tasks', async (req, res, next) => {
     const id = await nextId('tasks', 'TSK-');
     const row = { id, progress: 0, status: 'a_faire', created_at: today(), ...snakeize(req.body || {}) };
     throwIfError(await req.supa.from('tasks').insert(row));
+    // A task added after project creation (the everyday "+ Ajouter" flow)
+    // must also land in the project's `phases` snapshot — that's the only
+    // thing "Avancement par lot" and the Gantt read (see PATCH/DELETE
+    // below, which already keep it in sync for edits/removals; this was
+    // the missing case for new tasks).
+    if (row.project_id) {
+      const { data: p } = await req.supa.from('projects').select('phases').eq('id', row.project_id).maybeSingle();
+      if (p) {
+        const phases = [...(p.phases || []), {
+          taskId: row.id, name: row.title, start: row.start, end: row.due, progress: row.progress, lead: row.assignee
+        }];
+        await req.supa.from('projects').update({ phases }).eq('id', row.project_id);
+      }
+    }
     ok(res, row, 201);
   } catch (e) { next(e); }
 });
