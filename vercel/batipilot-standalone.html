@@ -1096,7 +1096,13 @@ table.tbl--rows tbody tr:hover{ background:var(--navy-050); }
 /* [hidden] doit l'emporter sur .app/.auth-screen qui définissent toutes
    deux `display` — sans ceci, l'attribut hidden est silencieusement
    ignoré par le navigateur (les styles auteur passent avant l'UA). */
-#app[hidden], #authScreen[hidden]{ display:none !important; }
+#app[hidden], #authScreen[hidden], #bootScreen[hidden]{ display:none !important; }
+.boot-spinner{
+  width:26px; height:26px; margin:22px auto 0; border-radius:50%;
+  border:3px solid var(--border); border-top-color:var(--orange);
+  animation:boot-spin .8s linear infinite;
+}
+@keyframes boot-spin{ to{ transform:rotate(360deg); } }
 body.role-assistant .write-guard{ display:none !important; }
 .auth-screen{ min-height:100vh; display:flex; align-items:center; justify-content:center; background:var(--bg); padding:24px; }
 .auth-card{ width:100%; max-width:360px; background:var(--surface); border:1px solid var(--border); border-radius:var(--r-lg); box-shadow:var(--shadow-2); padding:32px 28px; }
@@ -1113,7 +1119,16 @@ body.role-assistant .write-guard{ display:none !important; }
 </head>
 <body>
 
-<div class="auth-screen" id="authScreen">
+<div class="auth-screen" id="bootScreen">
+  <div class="auth-card" style="text-align:center">
+    <div class="auth-card__mark" style="margin:0 auto" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 20h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6 20V9l6-4 6 4v11" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/><path d="M10 20v-5h4v5" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+    </div>
+    <div class="boot-spinner" aria-hidden="true"></div>
+  </div>
+</div>
+
+<div class="auth-screen" id="authScreen" hidden>
   <div class="auth-card">
     <div class="auth-card__mark" aria-hidden="true">
       <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 20h18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M6 20V9l6-4 6 4v11" stroke="currentColor" stroke-width="2" stroke-linejoin="round" fill="none"/><path d="M10 20v-5h4v5" stroke="currentColor" stroke-width="2" fill="none"/></svg>
@@ -2873,20 +2888,20 @@ ERP.Components = ERP.Components || {};
           </section>
 
           <section class="card">
-            <div class="card__head"><h3>Budget</h3><span class="spacer"></span>${
-              p.burn >= 80 ? '<span class="badge badge--danger">Seuil d\'alerte</span>' : ''}</div>
+            <div class="card__head"><h3>Budget</h3><span class="spacer"></span>
+              <span id="prjBudgetAlert">${p.burn >= 80 ? '<span class="badge badge--danger">Seuil d\'alerte</span>' : ''}</span></div>
             <div class="card__body">
               <div class="row" style="justify-content:space-between;align-items:flex-end">
                 <div><div class="eyebrow">Budget initial</div><div class="money money--lg num">${fmt.money(p.budget)}</div></div>
                 <div style="text-align:right"><div class="eyebrow">Reste disponible</div>
-                  <div class="money money--lg num" style="color:${p.remaining < 0 ? 'var(--danger)' : 'var(--ok)'}">${fmt.money(p.remaining)}</div></div>
+                  <div class="money money--lg num" id="prjBudgetRemaining" style="color:${p.remaining < 0 ? 'var(--danger)' : 'var(--ok)'}">${fmt.money(p.remaining)}</div></div>
               </div>
               <div style="margin-top:16px">
                 <div class="row small muted" style="justify-content:space-between;margin-bottom:6px">
-                  <span>Consommé : <b class="num" style="color:var(--ink)">${fmt.money(p.spent)}</b></span>
-                  <span class="num">${p.burn} %</span>
+                  <span>Consommé : <b class="num" id="prjBudgetSpent" style="color:var(--ink)">${fmt.money(p.spent)}</b></span>
+                  <span class="num" id="prjBudgetPct">${p.burn} %</span>
                 </div>
-                ${pbar(p.burn, progressClass(p.burn))}
+                <div id="prjBudgetBar">${pbar(p.burn, progressClass(p.burn))}</div>
               </div>
               <div id="prjCats" style="margin-top:14px"></div>
             </div>
@@ -2931,13 +2946,34 @@ ERP.Components = ERP.Components || {};
     ERP.Components.materialRows(view.querySelector('#prjMaterials'), {
       projectId: p.id,
       onChange: async () => {
-        // Toute sortie de stock est imputée au budget du chantier
+        // Toute sortie de stock est imputée au budget du chantier — la
+        // tuile KPI en haut de page ET la carte « Budget » (initial /
+        // reste disponible / consommé / répartition) doivent toutes les
+        // deux refléter le nouveau montant sans recharger la page.
+        if (!view.isConnected) return; // l'utilisateur a déjà changé de page
         const fresh = await ERP.Api.projects.get(p.id);
+
         const kpi = view.querySelector('#prjBudgetKpi');
-        if (!kpi) return;
-        kpi.querySelector('.kpi__value').innerHTML = `${fresh.burn}<span>%</span>`;
-        kpi.querySelector('.kpi__foot').textContent = `${fmt.money(fresh.remaining)} restants`;
-        kpi.classList.toggle('kpi--alert', fresh.burn >= 90);
+        if (kpi) {
+          kpi.querySelector('.kpi__value').innerHTML = `${fresh.burn}<span>%</span>`;
+          kpi.querySelector('.kpi__foot').textContent = `${fmt.money(fresh.remaining)} restants`;
+          kpi.classList.toggle('kpi--alert', fresh.burn >= 90);
+        }
+
+        const remainingEl = view.querySelector('#prjBudgetRemaining');
+        if (remainingEl) {
+          remainingEl.textContent = fmt.money(fresh.remaining);
+          remainingEl.style.color = fresh.remaining < 0 ? 'var(--danger)' : 'var(--ok)';
+        }
+        const spentEl = view.querySelector('#prjBudgetSpent');
+        if (spentEl) spentEl.textContent = fmt.money(fresh.spent);
+        const pctEl = view.querySelector('#prjBudgetPct');
+        if (pctEl) pctEl.textContent = `${fresh.burn} %`;
+        const barEl = view.querySelector('#prjBudgetBar');
+        if (barEl) barEl.innerHTML = pbar(fresh.burn, progressClass(fresh.burn));
+        const alertEl = view.querySelector('#prjBudgetAlert');
+        if (alertEl) alertEl.innerHTML = fresh.burn >= 80 ? '<span class="badge badge--danger">Seuil d\'alerte</span>' : '';
+
         const cats = await ERP.Api.budget.categories({ projectId: p.id });
         const host = view.querySelector('#prjCats');
         if (host) ERP.Charts.hbars(host, { items: cats, formatter: fmt.moneyShort });
@@ -6399,6 +6435,7 @@ window.ERP = window.ERP || {};
 
   /* ---------- Connexion ---------- */
   function showLogin(message, okMessage) {
+    document.getElementById('bootScreen').hidden = true;
     document.getElementById('app').hidden = true;
     document.getElementById('authScreen').hidden = false;
     document.getElementById('authForm').hidden = false;
@@ -6529,15 +6566,18 @@ window.ERP = window.ERP || {};
     // session n'apparaîtra dans ces listes qu'après la prochaine connexion —
     // limite connue, pas un blocage pour l'usage courant.)
     try {
-      ERP.DB.projects = await ERP.Api.projects.list();
-      ERP.DB.tasks = await ERP.Api.tasks.list();
-      ERP.DB.articles = await ERP.Api.articles.list();
-      ERP.DB.notifications = await ERP.Api.notifications.list();
-      ERP.DB.clients = await ERP.Api.clients.list();
-      ERP.DB.workers = await ERP.Api.workers.list();
-      ERP.DB.suppliers = await ERP.Api.suppliers.list();
+      // Sept requêtes indépendantes — les lancer en parallèle plutôt qu'en
+      // série est ce qui fait la différence entre un retour à l'appli en
+      // ~300 ms ou en 2 à 3 s à chaque connexion/rechargement (chacune
+      // ajoutait son propre aller-retour réseau l'une après l'autre).
+      const [projects, tasks, articles, notifications, clients, workers, suppliers] = await Promise.all([
+        ERP.Api.projects.list(), ERP.Api.tasks.list(), ERP.Api.articles.list(),
+        ERP.Api.notifications.list(), ERP.Api.clients.list(), ERP.Api.workers.list(), ERP.Api.suppliers.list()
+      ]);
+      Object.assign(ERP.DB, { projects, tasks, articles, notifications, clients, workers, suppliers });
     } catch (_) { /* les badges/listes resteront sur les données de démo si l'API est indisponible */ }
 
+    document.getElementById('bootScreen').hidden = true;
     document.getElementById('authScreen').hidden = true;
     document.getElementById('app').hidden = false;
 
