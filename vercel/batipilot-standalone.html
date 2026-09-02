@@ -1444,7 +1444,12 @@ window.ERP = window.ERP || {};
     },
     budget: {
       summary: () => request('/budget/summary'),
-      categories: (params) => request('/budget/categories', { params }),
+      // ERP.Charts.hbars() reads `.value` on each item; the server returns
+      // `.amount` (the meaningful name for a cost breakdown). Map it here
+      // once instead of at every call site — that's how this got missed
+      // and rendered "NaN %" everywhere it's used.
+      categories: (params) => request('/budget/categories', { params })
+        .then((list) => list.map((c) => ({ ...c, value: c.amount }))),
       projects: () => request('/budget/projects')
     },
     planning: {

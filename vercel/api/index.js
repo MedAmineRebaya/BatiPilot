@@ -257,7 +257,7 @@ async function decorateWorker(supa, w) {
   };
 }
 
-async function moveStockAndCharge(supa, articleId, deltaQty, projectId) {
+async function moveStock(supa, articleId, deltaQty) {
   const { data: a } = await supa.from('articles').select('*').eq('id', articleId).maybeSingle();
   if (!a) throw new Error('Article introuvable');
   const stock = Math.max(0, a.stock - deltaQty);
@@ -265,22 +265,38 @@ async function moveStockAndCharge(supa, articleId, deltaQty, projectId) {
   const patch = { stock, stock_status: stockStatus };
   if (deltaQty > 0) patch.last_entry = today();
   throwIfError(await supa.from('articles').update(patch).eq('id', articleId));
-
-  const amount = deltaQty * a.price;
-  const { data: proj } = await supa.from('projects').select('spent').eq('id', projectId).maybeSingle();
-  if (proj) {
-    throwIfError(await supa.from('projects').update({ spent: Math.max(0, Math.round(proj.spent + amount)) }).eq('id', projectId));
-  }
-  const key = `DEP-${projectId}-materiaux`;
-  const { data: line } = await supa.from('expenses').select('*').eq('id', key).maybeSingle();
-  if (line) {
-    throwIfError(await supa.from('expenses').update({ amount: Math.max(0, Math.round(line.amount + amount)) }).eq('id', key));
-  } else {
-    throwIfError(await supa.from('expenses').insert({
-      id: key, project_id: projectId, category: 'materiaux', label: 'Matériaux', amount: Math.max(0, Math.round(amount))
-    }));
-  }
   return a;
+}
+
+// Recomputes the project's "matériaux" expense line and total spend from
+// the live project_materials rows, instead of incrementing/decrementing a
+// running total on every create/edit/delete. The old delta-based version
+// could drift from reality (each step rounded separately, and any call
+// that ran twice or partially — a retried request, a double-clicked
+// stepper — left a residual balance with nothing to reconcile it back to
+// the real allocations). This is called AFTER project_materials already
+// reflects its final state, so it's always exactly right.
+async function recomputeProjectSpend(supa, projectId) {
+  const { data: mats } = await supa.from('project_materials').select('qty,article_id').eq('project_id', projectId);
+  const articleIds = [...new Set((mats || []).map((m) => m.article_id))];
+  const { data: arts } = articleIds.length
+    ? await supa.from('articles').select('id,price').in('id', articleIds)
+    : { data: [] };
+  const priceById = Object.fromEntries((arts || []).map((a) => [a.id, a.price]));
+  const materialsCost = Math.round((mats || []).reduce((s, m) => s + m.qty * (priceById[m.article_id] || 0), 0));
+
+  const key = `DEP-${projectId}-materiaux`;
+  if (materialsCost > 0) {
+    throwIfError(await supa.from('expenses').upsert({
+      id: key, project_id: projectId, category: 'materiaux', label: 'Matériaux', amount: materialsCost
+    }));
+  } else {
+    await supa.from('expenses').delete().eq('id', key);
+  }
+
+  const { data: allExpenses } = await supa.from('expenses').select('amount').eq('project_id', projectId);
+  const spent = Math.round((allExpenses || []).reduce((s, e) => s + Number(e.amount || 0), 0));
+  throwIfError(await supa.from('projects').update({ spent }).eq('id', projectId));
 }
 
 /* =========================================================
@@ -813,7 +829,8 @@ api.post('/materials', async (req, res, next) => {
       author: profile ? profile.full_name : '', note: '', ...snakeize(body)
     };
     throwIfError(await req.supa.from('project_materials').insert(row));
-    await moveStockAndCharge(req.supa, row.article_id, row.qty, row.project_id);
+    await moveStock(req.supa, row.article_id, row.qty);
+    await recomputeProjectSpend(req.supa, row.project_id);
     ok(res, await decorateMaterial(req.supa, row), 201);
   } catch (e) { next(e); }
 });
@@ -827,10 +844,11 @@ api.patch('/materials/:id', async (req, res, next) => {
       const { data: a } = await req.supa.from('articles').select('stock').eq('id', item.article_id).maybeSingle();
       const delta = patch.qty - item.qty;
       if (a && delta > a.stock) return fail(res, 400, 'stock_insuffisant');
-      await moveStockAndCharge(req.supa, item.article_id, delta, item.project_id);
+      await moveStock(req.supa, item.article_id, delta);
     }
     const { data, error } = await req.supa.from('project_materials').update(snakeize(patch)).eq('id', req.params.id).select().maybeSingle();
     if (error) throw error;
+    if (patch.qty != null) await recomputeProjectSpend(req.supa, item.project_id);
     ok(res, await decorateMaterial(req.supa, data));
   } catch (e) { next(e); }
 });
@@ -839,8 +857,9 @@ api.delete('/materials/:id', async (req, res, next) => {
   try {
     const { data: item } = await req.supa.from('project_materials').select('*').eq('id', req.params.id).maybeSingle();
     if (item) {
-      await moveStockAndCharge(req.supa, item.article_id, -item.qty, item.project_id);
+      await moveStock(req.supa, item.article_id, -item.qty);
       throwIfError(await req.supa.from('project_materials').delete().eq('id', req.params.id));
+      await recomputeProjectSpend(req.supa, item.project_id);
     }
     res.status(204).end();
   } catch (e) { next(e); }
