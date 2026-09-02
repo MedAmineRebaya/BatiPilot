@@ -2688,17 +2688,30 @@ ERP.Components = ERP.Components || {};
     }
 
     async function addFiles(files, forcedKind) {
+      let ok = 0;
       for (const f of files) {
-        const isImage = f.type && f.type.startsWith('image/');
-        const url = isImage ? URL.createObjectURL(f) : null;
+        const name = f.name || `Photo chantier ${ERP.DB.today} (${Date.now().toString(36)}).jpg`;
+        // Uploaded straight to Supabase Storage from the browser — not
+        // through our own API — so a multi-MB site photo never has to fit
+        // inside the serverless function's request body size limit.
+        const path = `${p.id}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}-${name}`;
+        const { error: upErr } = await ERP.Auth.client.storage
+          .from('attachments')
+          .upload(path, f, { contentType: f.type || undefined });
+        if (upErr) {
+          console.warn('[attachments] upload failed', upErr);
+          toast(`Échec du téléversement de « ${name} » : ${upErr.message}`, 'danger');
+          continue;
+        }
+        const { data: pub } = ERP.Auth.client.storage.from('attachments').getPublicUrl(path);
         await ERP.Api.attachments.create(p.id, {
-          name: f.name || `Photo chantier ${ERP.DB.today} (${Date.now().toString(36)}).jpg`,
-          kind: forcedKind || fileKind(f), size: f.size, url
+          name, kind: forcedKind || fileKind(f), size: f.size, url: pub.publicUrl
         });
+        ok++;
       }
       await draw();
       onChange && onChange();
-      toast(`${files.length} pièce${files.length > 1 ? 's' : ''} attachée${files.length > 1 ? 's' : ''}`, 'ok');
+      if (ok) toast(`${ok} pièce${ok > 1 ? 's' : ''} attachée${ok > 1 ? 's' : ''}`, 'ok');
     }
 
     m.body.querySelector('[data-photo]').onclick = () => m.body.querySelector('#att-camera').click();
@@ -2716,7 +2729,7 @@ ERP.Components = ERP.Components || {};
       const id = b.closest('[data-att]').dataset.att;
       const a = (await ERP.Api.attachments.list(p.id)).find(x => x.id === id);
       if (a.url) window.open(a.url, '_blank');
-      else toast('Aperçu indisponible pour cette pièce de démonstration', 'info');
+      else toast('Aperçu indisponible pour cette pièce jointe', 'info');
     });
     on(m.body, 'click', '[data-del]', async (e, b) => {
       const id = b.closest('[data-att]').dataset.att;
@@ -2725,7 +2738,18 @@ ERP.Components = ERP.Components || {};
         title: 'Supprimer cette pièce ?', danger: true, confirmLabel: 'Supprimer',
         text: `<b>${esc(a.name)}</b> sera détachée du chantier.`
       });
-      if (ok) { await ERP.Api.attachments.remove(p.id, id); await draw(); onChange && onChange(); toast('Pièce supprimée', 'ok'); }
+      if (ok) {
+        await ERP.Api.attachments.remove(p.id, id);
+        // Best-effort: drop the underlying file too, but a storage hiccup
+        // here must never block removing the (already gone) metadata row.
+        const marker = '/object/public/attachments/';
+        const i = (a.url || '').indexOf(marker);
+        if (i !== -1) {
+          ERP.Auth.client.storage.from('attachments').remove([a.url.slice(i + marker.length)])
+            .catch((err) => console.warn('[attachments] storage cleanup failed (ignored)', err));
+        }
+        await draw(); onChange && onChange(); toast('Pièce supprimée', 'ok');
+      }
     });
     m.foot.querySelector('[data-cancel]').onclick = m.close;
 

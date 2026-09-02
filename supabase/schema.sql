@@ -721,6 +721,40 @@ create policy notifications_company_update on notifications for update
   with check (company_id is not null and company_id = my_company());
 
 -- =========================================================
+-- PHASE 3 — Real file storage for project attachments
+-- ---------------------------------------------------------
+-- attachments never actually stored a file: the client generated a
+-- browser-local blob: URL (dead the moment the tab closes, invisible to
+-- every other device/user) and the server tried to save it into a `url`
+-- column that didn't exist — every upload/photo attach was silently
+-- failing. Fixed by adding the column and a real Supabase Storage bucket
+-- that the client now uploads to directly (bypasses the API's request
+-- body size limit entirely, which matters for camera photos).
+-- =========================================================
+alter table attachments add column if not exists url text not null default '';
+
+insert into storage.buckets (id, name, public)
+values ('attachments', 'attachments', true)
+on conflict (id) do nothing;
+
+-- Any authenticated user may upload/delete within the 'attachments'
+-- bucket — the attachments TABLE's own RLS (ingénieur-write, company-read,
+-- above) is what actually restricts who can attach a file to which
+-- project; this only gates raw storage access, scoped to the one bucket.
+-- The bucket is public so `getPublicUrl()` links work without a signed
+-- URL — anyone with the exact random path can view a file, the same
+-- trade-off as most app-asset buckets.
+drop policy if exists attachments_bucket_select on storage.objects;
+create policy attachments_bucket_select on storage.objects for select
+  using (bucket_id = 'attachments');
+drop policy if exists attachments_bucket_insert on storage.objects;
+create policy attachments_bucket_insert on storage.objects for insert
+  with check (bucket_id = 'attachments' and auth.uid() is not null);
+drop policy if exists attachments_bucket_delete on storage.objects;
+create policy attachments_bucket_delete on storage.objects for delete
+  using (bucket_id = 'attachments' and auth.uid() is not null);
+
+-- =========================================================
 -- Done. Next: run supabase/seed-to-supabase.mjs to load db_seed.json,
 -- then promote yourself:
 --   update profiles set role = 'admin' where email = 'you@example.com';
