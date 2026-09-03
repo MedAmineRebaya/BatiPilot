@@ -245,8 +245,23 @@ create table if not exists quotes (
   status text not null default 'en_attente',
   project_id text references projects(id) on delete set null,
   lines jsonb not null default '[]'::jsonb,
-  total numeric not null default 0
+  total numeric not null default 0,
+  city text not null default '',
+  valid_until date,
+  start_date date,
+  months int not null default 8
 );
+
+-- Migration for databases created before these columns existed — the
+-- client form has always sent city/validUntil/startDate/months (openQuote()
+-- in clients.js, and convertQuote() reads them straight back to build the
+-- project a quote converts into), but the table never had them: every
+-- quote insert failed on "Could not find the 'city' column" and the
+-- feature never actually worked.
+alter table quotes add column if not exists city text not null default '';
+alter table quotes add column if not exists valid_until date;
+alter table quotes add column if not exists start_date date;
+alter table quotes add column if not exists months int not null default 8;
 
 create table if not exists expenses (
   id text primary key,
