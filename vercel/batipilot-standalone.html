@@ -1098,6 +1098,7 @@ table.tbl--rows tbody tr:hover{ background:var(--navy-050); }
   body.printing-quote .modal{ box-shadow:none; max-height:none; width:100%; }
   body.printing-quote .modal__head [data-close]{ display:none; }
 }
+.printable-quote__logo{ display:block; max-width:180px; max-height:90px; object-fit:contain; margin-bottom:16px; }
 
 /* ---- Connexion ---- */
 /* [hidden] doit l'emporter sur .app/.auth-screen qui définissent toutes
@@ -3983,12 +3984,26 @@ window.ERP = window.ERP || {};
   }
 
   /* ---------- Consultation d'un devis (lecture, modification, impression) ---------- */
+  // Le logo d'entête vit dans le bucket Storage « attachments », sous un
+  // chemin conventionnel par entreprise — pas besoin de colonne dédiée ni
+  // d'écran de paramétrage : téléverser un fichier à ce chemin (Storage →
+  // attachments → branding/<companyId>/logo.jpg) suffit à l'afficher. S'il
+  // n'existe pas encore pour cette entreprise, l'image se masque simplement
+  // (onerror) au lieu de casser l'aperçu.
+  function companyLogoUrl() {
+    const companyId = ERP.DB.user && ERP.DB.user.companyId;
+    if (!companyId) return null;
+    return ERP.Auth.client.storage.from('attachments').getPublicUrl(`branding/${companyId}/logo.jpg`).data.publicUrl;
+  }
+
   function openQuoteView(c, quote, done) {
     if (!quote || !quote.id) { toast('Devis introuvable', 'danger'); return; }
     const ht = quote.lines.reduce((s, l) => s + l.qty * l.price, 0);
+    const logoUrl = companyLogoUrl();
     const m = ERP.UI.modal({
       title: quote.id, sub: esc(c.company), size: 'modal--wide',
       body: `<div class="printable-quote">
+        ${logoUrl ? `<img src="${logoUrl}" alt="" class="printable-quote__logo" onerror="this.remove()">` : ''}
         <dl class="props">
           <div class="prop"><dt>Objet</dt><dd>${esc(quote.title)}</dd></div>
           <div class="prop"><dt>Ville des travaux</dt><dd>${esc(quote.city || '—')}</dd></div>
@@ -6688,7 +6703,12 @@ window.ERP = window.ERP || {};
       email: session.user.email,
       phone: (profile && profile.phone) || '',
       agency: (profile && profile.agency) || '',
-      since: (profile && profile.since) || ''
+      since: (profile && profile.since) || '',
+      // L'ingénieur EST sa propre entreprise (son id = l'id d'entreprise
+      // partout ailleurs dans l'app) ; un assistant hérite de celle de
+      // l'ingénieur qui l'a invité. Sert à retrouver des ressources
+      // propres à l'entreprise (ex. le logo sur les devis imprimés).
+      companyId: (profile && profile.role === 'assistant' && profile.company_id) || session.user.id
     };
 
     // Remplace le jeu de démo statique (data.js) par les vraies données,
