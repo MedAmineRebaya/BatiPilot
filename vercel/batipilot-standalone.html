@@ -1093,12 +1093,53 @@ table.tbl--rows tbody tr:hover{ background:var(--navy-050); }
   /* Impression d'un devis (voir openQuoteView) : le reste de l'écran —
      y compris la fiche client derrière la modale — ne doit pas apparaître
      sur la page imprimée, seul le contenu de la modale doit sortir. */
-  body.printing-quote .app, body.printing-quote .modal__foot{ display:none !important; }
+  body.printing-quote .app, body.printing-quote .modal__foot, body.printing-quote .modal__head{ display:none !important; }
   body.printing-quote .modal-scrim{ position:static; background:none; backdrop-filter:none; padding:0; display:block; }
   body.printing-quote .modal{ box-shadow:none; max-height:none; width:100%; }
-  body.printing-quote .modal__head [data-close]{ display:none; }
+  body.printing-quote .modal__body{ padding-top:0; }
 }
-.printable-quote__logo{ display:block; max-width:180px; max-height:90px; object-fit:contain; margin-bottom:16px; }
+/* ---------- Document DEVIS (aperçu + impression) ---------- */
+.devis-doc{ font-size:14px; color:var(--ink); }
+.devis-doc__head{
+  display:flex; justify-content:space-between; align-items:flex-start; gap:24px;
+  padding-bottom:16px; border-bottom:2px solid var(--navy); margin-bottom:22px;
+}
+.devis-doc__brand{ display:flex; gap:14px; align-items:flex-start; min-width:0; }
+.devis-doc__logo{ max-width:120px; max-height:70px; object-fit:contain; flex:none; }
+.devis-doc__company{ display:flex; flex-direction:column; gap:2px; font-size:13px; color:var(--muted); }
+.devis-doc__company strong{ font-size:15.5px; color:var(--ink); font-family:"Barlow Semi Condensed",sans-serif; }
+.devis-doc__ref{ text-align:right; flex:none; }
+.devis-doc__title{ font-family:"Barlow Semi Condensed",sans-serif; font-weight:700; font-size:26px; letter-spacing:1px; color:var(--navy); line-height:1; }
+.devis-doc__num{ font-weight:600; font-size:15px; margin-top:4px; }
+.devis-doc__date{ font-size:12.5px; color:var(--muted); margin-top:2px; }
+
+.devis-doc__parties{ display:grid; grid-template-columns:repeat(3,1fr); gap:20px; margin-bottom:24px; }
+.devis-doc__parties > div{ line-height:1.6; }
+.devis-doc__label{
+  font-family:"Barlow Semi Condensed",sans-serif; font-size:11.5px; font-weight:600;
+  letter-spacing:.6px; text-transform:uppercase; color:var(--muted); margin-bottom:5px;
+}
+
+.devis-doc__table{ width:100%; border-collapse:collapse; margin-bottom:20px; }
+.devis-doc__table th{
+  text-align:left; font-family:"Barlow Semi Condensed",sans-serif; font-size:12px; font-weight:600;
+  letter-spacing:.4px; text-transform:uppercase; color:#fff; background:var(--navy); padding:10px 12px;
+}
+.devis-doc__table th:first-child{ border-radius:var(--r) 0 0 0; }
+.devis-doc__table th:last-child{ border-radius:0 var(--r) 0 0; }
+.devis-doc__table th.t-right, .devis-doc__table td.t-right{ text-align:right; }
+.devis-doc__table td{ padding:10px 12px; border-bottom:1px solid var(--border); }
+.devis-doc__table tbody tr:nth-child(even){ background:var(--surface-2); }
+
+.devis-doc__totals{ margin-left:auto; width:min(300px,100%); display:flex; flex-direction:column; gap:7px; margin-bottom:28px; }
+.devis-doc__totals > div{ display:flex; justify-content:space-between; align-items:baseline; font-size:14px; }
+.devis-doc__totals .devis-doc__ttc{ border-top:2px solid var(--navy); margin-top:6px; padding-top:9px; font-size:17px; }
+.devis-doc__totals .devis-doc__ttc b{ color:var(--orange); font-size:19px; }
+
+.devis-doc__foot p{ font-size:12.5px; color:var(--muted); margin:0 0 30px; }
+.devis-doc__sign{ display:flex; justify-content:space-between; gap:40px; font-size:13px; }
+.devis-doc__sign > div{ flex:1; display:flex; flex-direction:column; }
+.devis-doc__signline{ display:block; margin-top:46px; border-top:1px solid var(--border); }
 
 /* ---- Connexion ---- */
 /* [hidden] doit l'emporter sur .app/.auth-screen qui définissent toutes
@@ -3999,31 +4040,66 @@ window.ERP = window.ERP || {};
   function openQuoteView(c, quote, done) {
     if (!quote || !quote.id) { toast('Devis introuvable', 'danger'); return; }
     const ht = quote.lines.reduce((s, l) => s + l.qty * l.price, 0);
+    const tva = Math.round(ht * 0.19);
     const logoUrl = companyLogoUrl();
+    const u = ERP.DB.user;
     const m = ERP.UI.modal({
       title: quote.id, sub: esc(c.company), size: 'modal--wide',
-      body: `<div class="printable-quote">
-        ${logoUrl ? `<img src="${logoUrl}" alt="" class="printable-quote__logo" onerror="this.remove()">` : ''}
-        <dl class="props">
-          <div class="prop"><dt>Objet</dt><dd>${esc(quote.title)}</dd></div>
-          <div class="prop"><dt>Ville des travaux</dt><dd>${esc(quote.city || '—')}</dd></div>
-          <div class="prop"><dt>Date d'émission</dt><dd class="num">${fmt.date(quote.date)}</dd></div>
-          <div class="prop"><dt>Validité de l'offre</dt><dd class="num">${quote.validUntil ? fmt.date(quote.validUntil) : '—'}</dd></div>
-          <div class="prop"><dt>Démarrage envisagé</dt><dd class="num">${quote.startDate ? fmt.date(quote.startDate) : '—'}</dd></div>
-          <div class="prop"><dt>Durée estimée</dt><dd class="num">${quote.months} mois</dd></div>
-        </dl>
-        <h3 style="margin:18px 0 10px">Postes du devis</h3>
-        <div class="table-wrap"><table class="tbl" style="min-width:520px">
-          <thead><tr><th>Désignation</th><th class="t-right">Qté</th><th class="t-right">Prix unitaire</th><th class="t-right">Total</th></tr></thead>
+      body: `<div class="devis-doc">
+        <header class="devis-doc__head">
+          <div class="devis-doc__brand">
+            ${logoUrl ? `<img src="${logoUrl}" alt="" class="devis-doc__logo" onerror="this.remove()">` : ''}
+            <div class="devis-doc__company">
+              <strong>${esc(u.name)}</strong>
+              ${u.email ? `<span>${esc(u.email)}</span>` : ''}
+              ${u.phone ? `<span>${esc(u.phone)}</span>` : ''}
+            </div>
+          </div>
+          <div class="devis-doc__ref">
+            <div class="devis-doc__title">DEVIS</div>
+            <div class="devis-doc__num">N° ${esc(quote.id)}</div>
+            <div class="devis-doc__date">Émis le ${fmt.date(quote.date)}</div>
+          </div>
+        </header>
+
+        <div class="devis-doc__parties">
+          <div><div class="devis-doc__label">Client</div>
+            <strong>${esc(c.company)}</strong><br>
+            ${c.contact ? esc(c.contact) + '<br>' : ''}
+            ${c.address ? esc(c.address) + '<br>' : ''}
+            ${esc(c.city || '')}
+          </div>
+          <div><div class="devis-doc__label">Chantier</div>
+            <strong>${esc(quote.title)}</strong><br>
+            ${esc(quote.city || '—')}
+          </div>
+          <div><div class="devis-doc__label">Conditions</div>
+            Validité : ${quote.validUntil ? fmt.date(quote.validUntil) : '—'}<br>
+            Démarrage envisagé : ${quote.startDate ? fmt.date(quote.startDate) : '—'}<br>
+            Durée estimée : ${quote.months} mois
+          </div>
+        </div>
+
+        <table class="devis-doc__table">
+          <thead><tr><th>Désignation</th><th class="t-right">Qté</th><th class="t-right">Prix unitaire</th><th class="t-right">Total HT</th></tr></thead>
           <tbody>${quote.lines.map(l => `<tr>
             <td>${esc(l.label)}</td><td class="t-right num">${fmt.dec(l.qty, 1)}</td>
-            <td class="t-right num">${fmt.dec(l.price, 2)} DT</td><td class="t-right money num">${fmt.money(l.qty * l.price)}</td>
+            <td class="t-right num">${fmt.dec(l.price, 2)} DT</td><td class="t-right num">${fmt.money(l.qty * l.price)}</td>
           </tr>`).join('')}</tbody>
-        </table></div>
-        <div class="stat-band" style="margin-top:18px;grid-template-columns:repeat(3,1fr)">
-          <div><dt>Total HT</dt><div class="money money--lg num">${fmt.money(ht)}</div></div>
-          <div><dt>TVA 19 %</dt><div class="money money--lg num">${fmt.money(Math.round(ht * 0.19))}</div></div>
-          <div><dt>Total TTC</dt><div class="money money--xl num" style="color:var(--orange)">${fmt.money(quote.total)}</div></div>
+        </table>
+
+        <div class="devis-doc__totals">
+          <div><span>Total HT</span><b class="num">${fmt.money(ht)}</b></div>
+          <div><span>TVA 19 %</span><b class="num">${fmt.money(tva)}</b></div>
+          <div class="devis-doc__ttc"><span>Total TTC</span><b class="num">${fmt.money(quote.total)}</b></div>
+        </div>
+
+        <div class="devis-doc__foot">
+          <p>Devis valable jusqu'au ${quote.validUntil ? fmt.date(quote.validUntil) : '—'}. Bon pour accord précédé de la date et de la signature.</p>
+          <div class="devis-doc__sign">
+            <div>Le client<span class="devis-doc__signline"></span></div>
+            <div>${esc(u.name)}<span class="devis-doc__signline"></span></div>
+          </div>
         </div>
       </div>`,
       footer: `<button class="btn" data-close2 type="button">Fermer</button>
