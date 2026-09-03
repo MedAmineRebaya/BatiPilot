@@ -507,7 +507,16 @@ api.get('/clients/:id', async (req, res, next) => {
       req.supa.from('quotes').select('*').eq('client_id', c.id)
     ]);
     const decoratedProjects = await Promise.all((projects || []).map((p) => decorateProject(req.supa, p)));
-    ok(res, { ...(await decorateClient(req.supa, c)), projects: decoratedProjects.map(camelize), quotes: camelize(quotes || []), history: [] });
+    // "Historique commercial" was always sent as an empty array — the
+    // count badge above it reads quotes.length (real), so it showed
+    // "1 devis établi" with nothing underneath. Built from the actual
+    // quotes; each one is a history line the UI already knows how to
+    // render (type/ref/date/amount/note + quoteId to open/convert it).
+    const history = (quotes || []).slice().sort((a, b) => b.date.localeCompare(a.date)).map((q) => ({
+      type: 'Devis', ref: q.id, date: q.date, amount: q.total, note: q.title,
+      quoteId: q.id, tone: q.status === 'accepte' ? 'ok' : 'info'
+    }));
+    ok(res, { ...(await decorateClient(req.supa, c)), projects: decoratedProjects.map(camelize), quotes: camelize(quotes || []), history });
   } catch (e) { next(e); }
 });
 

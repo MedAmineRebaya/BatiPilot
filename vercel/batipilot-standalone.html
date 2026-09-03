@@ -1090,6 +1090,13 @@ table.tbl--rows tbody tr:hover{ background:var(--navy-050); }
   .app{ display:block; height:auto; }
   .view{ overflow:visible; padding:0; }
   .card{ break-inside:avoid; box-shadow:none; }
+  /* Impression d'un devis (voir openQuoteView) : le reste de l'écran —
+     y compris la fiche client derrière la modale — ne doit pas apparaître
+     sur la page imprimée, seul le contenu de la modale doit sortir. */
+  body.printing-quote .app, body.printing-quote .modal__foot{ display:none !important; }
+  body.printing-quote .modal-scrim{ position:static; background:none; backdrop-filter:none; padding:0; display:block; }
+  body.printing-quote .modal{ box-shadow:none; max-height:none; width:100%; }
+  body.printing-quote .modal__head [data-close]{ display:none; }
 }
 
 /* ---- Connexion ---- */
@@ -3824,9 +3831,11 @@ window.ERP = window.ERP || {};
                   <td class="num">${fmt.date(h.date)}</td>
                   <td class="t-right money num">${h.amount ? fmt.money(h.amount) : '—'}</td>
                   <td class="small muted">${esc(h.note || '—')}</td>
-                  <td class="t-right">${h.quoteId ? (quoteById(c, h.quoteId).projectId
-                    ? `<a class="btn btn--sm btn--ghost" href="#/projets/${quoteById(c, h.quoteId).projectId}">Voir le projet</a>`
-                    : `<button class="btn btn--sm btn--accent write-guard" data-convert="${h.quoteId}" type="button">Convertir en projet</button>`) : '—'}</td>
+                  <td class="t-right">${h.quoteId ? `
+                    <button class="btn btn--sm btn--ghost" data-view-quote="${h.quoteId}" type="button">${icon('eye', 15)} Voir</button>
+                    ${quoteById(c, h.quoteId).projectId
+                      ? `<a class="btn btn--sm btn--ghost" href="#/projets/${quoteById(c, h.quoteId).projectId}">Voir le projet</a>`
+                      : `<button class="btn btn--sm btn--accent write-guard" data-convert="${h.quoteId}" type="button">Convertir en projet</button>`}` : '—'}</td>
                   </tr>`).join('')}</tbody></table>
             </div></div>
           </section>
@@ -3855,6 +3864,7 @@ window.ERP = window.ERP || {};
     view.querySelector('[data-quote]').onclick = () => openQuote(c, reload);
     view.querySelector('[data-quote2]').onclick = () => openQuote(c, reload);
     on(view, 'click', '[data-convert]', async (e, b) => convertQuote(b.dataset.convert, reload));
+    on(view, 'click', '[data-view-quote]', (e, b) => openQuoteView(c, quoteById(c, b.dataset.viewQuote), reload));
     view.querySelector('[data-edit]').onclick = () => openForm(() => renderDetail(params, view), c);
     view.querySelector('[data-del-client]').onclick = async () => {
       const ok = await confirm({
@@ -3875,23 +3885,24 @@ window.ERP = window.ERP || {};
      ======================================================= */
   function quoteById(c, id) { return c.quotes.find(q => q.id === id) || {}; }
 
-  function openQuote(c, done) {
-    const lines = [
+  function openQuote(c, done, existing = null) {
+    const lines = existing ? existing.lines.map(l => ({ ...l })) : [
       { label: 'Gros œuvre', qty: 1, price: 0 }
     ];
 
     const m = ERP.UI.modal({
-      title: 'Nouveau devis', sub: esc(c.company), size: 'modal--wide',
+      title: existing ? 'Modifier le devis' : 'Nouveau devis', sub: esc(c.company), size: 'modal--wide',
       body: `<div class="form-grid">
           <div class="field field--full"><label for="q-title">Objet du devis</label>
-            <input id="q-title" placeholder="Ex. : Construction d'un immeuble R+3 — Ariana"></div>
-          <div class="field"><label for="q-city">Ville des travaux</label><input id="q-city" placeholder="Tunis"></div>
+            <input id="q-title" value="${existing ? esc(existing.title) : ''}" placeholder="Ex. : Construction d'un immeuble R+3 — Ariana"></div>
+          <div class="field"><label for="q-city">Ville des travaux</label>
+            <input id="q-city" value="${existing ? esc(existing.city) : ''}" placeholder="Tunis"></div>
           <div class="field"><label for="q-valid">Validité de l'offre</label>
-            <input id="q-valid" type="date" value="${ERP.dt.add(ERP.DB.today, 30)}"></div>
+            <input id="q-valid" type="date" value="${existing && existing.validUntil ? existing.validUntil : ERP.dt.add(ERP.DB.today, 30)}"></div>
           <div class="field"><label for="q-start">Démarrage envisagé</label>
-            <input id="q-start" type="date" value="${ERP.dt.add(ERP.DB.today, 45)}"></div>
+            <input id="q-start" type="date" value="${existing && existing.startDate ? existing.startDate : ERP.dt.add(ERP.DB.today, 45)}"></div>
           <div class="field"><label for="q-months">Durée estimée (mois)</label>
-            <input id="q-months" type="number" min="1" max="60" value="8"></div>
+            <input id="q-months" type="number" min="1" max="60" value="${existing ? existing.months : 8}"></div>
         </div>
 
         <h3 style="margin:22px 0 10px">Postes du devis</h3>
@@ -3909,7 +3920,7 @@ window.ERP = window.ERP || {};
           <div><dt>Total TTC</dt><div class="money money--xl num" id="q-ttc" style="color:var(--orange)">0 DT</div></div>
         </div>`,
       footer: `<button class="btn" data-cancel type="button">Annuler</button>
-               <button class="btn btn--primary" data-save type="button">${icon('save', 18)} Établir le devis</button>`
+               <button class="btn btn--primary" data-save type="button">${icon('save', 18)} ${existing ? 'Enregistrer' : 'Établir le devis'}</button>`
     });
 
     const q = (sel) => m.body.querySelector(sel);
@@ -3952,15 +3963,69 @@ window.ERP = window.ERP || {};
       const ht = totals();
       if (ht <= 0) { toast('Renseignez au moins un poste chiffré', 'danger'); return; }
 
-      const quote = await ERP.Api.quotes.create({
+      const payload = {
         clientId: c.id, title, city: q('#q-city').value.trim() || c.city || 'Tunis',
         validUntil: q('#q-valid').value, startDate: q('#q-start').value,
         months: +q('#q-months').value || 8,
         lines: lines.filter(l => l.label.trim())
-      });
-      m.close();
-      toast(`Devis ${quote.id} établi — ${fmt.money(quote.total)}`, 'ok', 3200);
+      };
+      if (existing) {
+        const quote = await ERP.Api.quotes.update(existing.id, payload);
+        m.close();
+        toast(`Devis ${quote.id} mis à jour — ${fmt.money(quote.total)}`, 'ok', 3200);
+      } else {
+        const quote = await ERP.Api.quotes.create(payload);
+        m.close();
+        toast(`Devis ${quote.id} établi — ${fmt.money(quote.total)}`, 'ok', 3200);
+      }
       done && done();
+    };
+  }
+
+  /* ---------- Consultation d'un devis (lecture, modification, impression) ---------- */
+  function openQuoteView(c, quote, done) {
+    if (!quote || !quote.id) { toast('Devis introuvable', 'danger'); return; }
+    const ht = quote.lines.reduce((s, l) => s + l.qty * l.price, 0);
+    const m = ERP.UI.modal({
+      title: quote.id, sub: esc(c.company), size: 'modal--wide',
+      body: `<div class="printable-quote">
+        <dl class="props">
+          <div class="prop"><dt>Objet</dt><dd>${esc(quote.title)}</dd></div>
+          <div class="prop"><dt>Ville des travaux</dt><dd>${esc(quote.city || '—')}</dd></div>
+          <div class="prop"><dt>Date d'émission</dt><dd class="num">${fmt.date(quote.date)}</dd></div>
+          <div class="prop"><dt>Validité de l'offre</dt><dd class="num">${quote.validUntil ? fmt.date(quote.validUntil) : '—'}</dd></div>
+          <div class="prop"><dt>Démarrage envisagé</dt><dd class="num">${quote.startDate ? fmt.date(quote.startDate) : '—'}</dd></div>
+          <div class="prop"><dt>Durée estimée</dt><dd class="num">${quote.months} mois</dd></div>
+        </dl>
+        <h3 style="margin:18px 0 10px">Postes du devis</h3>
+        <div class="table-wrap"><table class="tbl" style="min-width:520px">
+          <thead><tr><th>Désignation</th><th class="t-right">Qté</th><th class="t-right">Prix unitaire</th><th class="t-right">Total</th></tr></thead>
+          <tbody>${quote.lines.map(l => `<tr>
+            <td>${esc(l.label)}</td><td class="t-right num">${fmt.dec(l.qty, 1)}</td>
+            <td class="t-right num">${fmt.dec(l.price, 2)} DT</td><td class="t-right money num">${fmt.money(l.qty * l.price)}</td>
+          </tr>`).join('')}</tbody>
+        </table></div>
+        <div class="stat-band" style="margin-top:18px;grid-template-columns:repeat(3,1fr)">
+          <div><dt>Total HT</dt><div class="money money--lg num">${fmt.money(ht)}</div></div>
+          <div><dt>TVA 19 %</dt><div class="money money--lg num">${fmt.money(Math.round(ht * 0.19))}</div></div>
+          <div><dt>Total TTC</dt><div class="money money--xl num" style="color:var(--orange)">${fmt.money(quote.total)}</div></div>
+        </div>
+      </div>`,
+      footer: `<button class="btn" data-close2 type="button">Fermer</button>
+               <span style="flex:1"></span>
+               <button class="btn write-guard" data-print type="button">${icon('printer', 18)} Imprimer / Télécharger</button>
+               <button class="btn btn--primary write-guard" data-edit-quote type="button">${icon('edit', 18)} Modifier</button>`
+    });
+    m.foot.querySelector('[data-close2]').onclick = m.close;
+    m.foot.querySelector('[data-edit-quote]').onclick = () => { m.close(); openQuote(c, done, quote); };
+    m.foot.querySelector('[data-print]').onclick = () => {
+      // Même convention que le rapport de chantier et la page Rapports :
+      // pas de génération PDF dédiée, on s'appuie sur « Imprimer » du
+      // navigateur (qui propose « Enregistrer en PDF ») — la classe ne
+      // fait qu'isoler ce devis du reste de l'écran le temps de l'impression.
+      document.body.classList.add('printing-quote');
+      window.print();
+      document.body.classList.remove('printing-quote');
     };
   }
 
