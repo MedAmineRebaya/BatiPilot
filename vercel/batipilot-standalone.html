@@ -3479,6 +3479,12 @@ window.ERP = window.ERP || {};
           await ERP.Api.workers.create(payload);
           toast('Ouvrier créé', 'ok');
         }
+        // ERP.DB.workers est le cache synchrone dont dépendent la fiche
+        // projet (« Équipe sur site »), les listes déroulantes d'affectation
+        // et le filtre Métier ici même — sans ce rafraîchissement, un
+        // ouvrier tout juste créé restait invisible partout ailleurs dans
+        // l'appli jusqu'à la prochaine connexion.
+        ERP.DB.workers = await ERP.Api.workers.list();
         m.close();
         if (done) done();
       } catch (err) {
@@ -3493,6 +3499,7 @@ window.ERP = window.ERP || {};
         });
         if (!ok) return;
         await ERP.Api.workers.remove(worker.id);
+        ERP.DB.workers = await ERP.Api.workers.list();
         m.close();
         toast('Ouvrier supprimé', 'ok');
         if (done) done();
@@ -4205,14 +4212,30 @@ window.ERP.Components = window.ERP.Components || {};
 
         <h3 style="margin:20px 0 10px">Mouvement de stock</h3>
         <div class="pick">
+          <div class="small muted" style="margin-bottom:8px">Vers ou depuis un chantier</div>
           <div class="pick__form" style="grid-template-columns:1.6fr .7fr auto auto">
-            <div class="field"><label for="mv-project">Chantier destinataire</label>
+            <div class="field"><label for="mv-project">Chantier</label>
               <select id="mv-project">${openProjects.map(p =>
                 `<option value="${p.id}">${esc(p.name)}</option>`).join('')}</select></div>
             <div class="field"><label for="mv-qty">Quantité (${a.unit})</label>
               <input id="mv-qty" type="number" min="1" value="10"></div>
             <button class="btn btn--accent write-guard" data-out type="button">${icon('minus', 18)} Sortie chantier</button>
-            <button class="btn btn--primary write-guard" data-in type="button">${icon('plus', 18)} Entrée dépôt</button>
+            <button class="btn btn--ghost write-guard" data-return type="button">${icon('arrowLeft', 18)} Retour au dépôt</button>
+          </div>
+        </div>
+
+        <div class="pick" style="margin-top:12px">
+          <div class="small muted" style="margin-bottom:8px">Nouvelle livraison fournisseur</div>
+          <div class="pick__form" style="grid-template-columns:1.6fr .7fr auto">
+            <div class="field"><label for="mv-supplier">Fournisseur</label>
+              <select id="mv-supplier">
+                <option value="">— Non renseigné —</option>
+                ${ERP.DB.suppliers.slice().sort((x, y) => x.company.localeCompare(y.company)).map(s =>
+                  `<option value="${s.id}" ${a.supplierId === s.id ? 'selected' : ''}>${esc(s.company)} — ${esc(s.city)}</option>`).join('')}
+              </select></div>
+            <div class="field"><label for="mv-in-qty">Quantité (${a.unit})</label>
+              <input id="mv-in-qty" type="number" min="1" value="10"></div>
+            <button class="btn btn--primary write-guard" data-in type="button">${icon('download', 18)} Entrée dépôt</button>
           </div>
         </div>
 
@@ -4237,10 +4260,21 @@ window.ERP.Components = window.ERP.Components || {};
     });
 
     const qty = () => Math.max(1, +m.body.querySelector('#mv-qty').value || 0);
+
+    // Entrée dépôt = une vraie livraison fournisseur, indépendante de tout
+    // chantier : augmente le stock et, si un fournisseur est choisi,
+    // rattache l'article à celui-ci (utile pour un article créé sans
+    // fournisseur renseigné).
     m.body.querySelector('[data-in]').onclick = async () => {
-      const n = qty();
-      await ERP.Api.articles.update(a.id, { stock: a.stock + n, lastEntry: ERP.DB.today });
-      m.close(); toast(`Entrée de ${n} ${a.unit} enregistrée`, 'ok'); done && done();
+      const n = Math.max(1, +m.body.querySelector('#mv-in-qty').value || 0);
+      const supplierId = m.body.querySelector('#mv-supplier').value || null;
+      const supplier = supplierId ? ERP.DB.suppliers.find(x => x.id === supplierId) : null;
+      const patch = { stock: a.stock + n, lastEntry: ERP.DB.today };
+      if (supplierId) { patch.supplierId = supplierId; patch.supplier = supplier ? supplier.company : a.supplier; }
+      await ERP.Api.articles.update(a.id, patch);
+      m.close();
+      toast(`Entrée de ${n} ${a.unit}${supplier ? ` depuis ${supplier.company}` : ''} enregistrée`, 'ok');
+      done && done();
     };
     m.body.querySelector('[data-out]').onclick = async () => {
       const n = qty();
@@ -4250,6 +4284,35 @@ window.ERP.Components = window.ERP.Components || {};
       const proj = openProjects.find(p => p.id === projectId);
       m.close();
       toast(`${n} ${a.unit} affectés à ${proj ? proj.name : 'ce chantier'}`, 'ok');
+      done && done();
+    };
+    // Retour au dépôt = l'inverse de « Sortie chantier » : réduit (ou
+    // supprime) l'affectation du chantier choisi et rend la quantité au
+    // stock — c'est ce qui manquait : avant ce correctif, seul le stock
+    // du dépôt augmentait, la ligne du chantier dans « Chantiers
+    // desservis » ne bougeait jamais.
+    m.body.querySelector('[data-return]').onclick = async () => {
+      const requested = qty();
+      const projectId = m.body.querySelector('#mv-project').value;
+      const rows = affect.filter((x) => x.projectId === projectId);
+      const available = rows.reduce((s, x) => s + x.qty, 0);
+      if (available <= 0) {
+        toast('Aucune quantité de cet article n\'est affectée à ce chantier', 'danger');
+        return;
+      }
+      let remaining = Math.min(requested, available);
+      const returned = remaining;
+      for (const row of rows) {
+        if (remaining <= 0) break;
+        const take = Math.min(remaining, row.qty);
+        if (take >= row.qty) await ERP.Api.materials.remove(row.id);
+        else await ERP.Api.materials.update(row.id, { qty: row.qty - take });
+        remaining -= take;
+      }
+      const proj = openProjects.find((p) => p.id === projectId);
+      m.close();
+      toast(`Retour de ${returned} ${a.unit} depuis ${proj ? proj.name : 'ce chantier'} enregistré`
+        + (requested > available ? ` (limité au disponible : ${available})` : ''), 'ok');
       done && done();
     };
     if (sup) {
@@ -4268,8 +4331,15 @@ window.ERP.Components = window.ERP.Components || {};
   }
 
   /* ---------- Formulaire article ---------- */
+  // Liste de base toujours proposée, complétée par les catégories déjà
+  // utilisées par l'entreprise. Sans ce socle, une entreprise qui vient de
+  // charger son tout premier article (ERP.DB.articles encore vide) se
+  // retrouvait avec un menu Catégorie sans aucune option — donc une
+  // catégorie enregistrée vide en silence, impossible à corriger ensuite
+  // sans en créer un second article pour peupler la liste.
+  const BASE_CATEGORIES = ['Gros œuvre', 'Ferraillage', 'Électricité', 'Plomberie', 'Finitions', 'Menuiserie', 'Étanchéité'];
   function openForm(done, article = null) {
-    const categories = [...new Set(ERP.DB.articles.map(a => a.category))].sort();
+    const categories = [...new Set([...BASE_CATEGORIES, ...ERP.DB.articles.map(a => a.category).filter(Boolean)])].sort();
     const m = ERP.UI.modal({
       title: article ? 'Modifier l\'article' : 'Nouvel article',
       sub: article ? article.ref : 'Ajouter un matériau au catalogue',
