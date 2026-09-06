@@ -2825,6 +2825,25 @@ ERP.Components = ERP.Components || {};
     await draw();
   }
 
+  /* Extrait pour être réutilisé par le rafraîchissement en direct de la
+     fiche projet (onChange des tâches) sans dupliquer le gabarit. */
+  function renderPhases(phases) {
+    return phases.map(ph => {
+      const late = ph.progress < 100 && ph.end < ERP.DB.today;
+      return `<div>
+        <div class="row" style="margin-bottom:7px">
+          <strong style="font-size:15px">${esc(ph.name)}</strong>
+          ${late ? `<span class="badge badge--danger">+${ERP.dt.diff(ph.end, ERP.DB.today)} j</span>` : ''}
+          <span class="spacer"></span>
+          <span class="small muted num">${fmt.dateShort(ph.start)} → ${fmt.dateShort(ph.end)}</span>
+          <b class="num" style="min-width:44px;text-align:right">${ph.progress} %</b>
+        </div>
+        ${pbar(ph.progress, ph.progress === 100 ? 'pbar__fill--ok' : late ? 'pbar__fill--danger' : '')}
+        <div class="small muted" style="margin-top:6px">Responsable : ${esc(ph.lead)}</div>
+      </div>`;
+    }).join('');
+  }
+
   /* =======================================================
      FICHE PROJET
      ======================================================= */
@@ -2889,23 +2908,8 @@ ERP.Components = ERP.Components || {};
 
           <section class="card">
             <div class="card__head"><h3>Avancement par lot</h3><span class="spacer"></span>
-              <span class="tag">${p.phases.length} lots</span></div>
-            <div class="card__body stack" style="gap:16px">
-              ${p.phases.map(ph => {
-                const late = ph.progress < 100 && ph.end < ERP.DB.today;
-                return `<div>
-                  <div class="row" style="margin-bottom:7px">
-                    <strong style="font-size:15px">${esc(ph.name)}</strong>
-                    ${late ? `<span class="badge badge--danger">+${ERP.dt.diff(ph.end, ERP.DB.today)} j</span>` : ''}
-                    <span class="spacer"></span>
-                    <span class="small muted num">${fmt.dateShort(ph.start)} → ${fmt.dateShort(ph.end)}</span>
-                    <b class="num" style="min-width:44px;text-align:right">${ph.progress} %</b>
-                  </div>
-                  ${pbar(ph.progress, ph.progress === 100 ? 'pbar__fill--ok' : late ? 'pbar__fill--danger' : '')}
-                  <div class="small muted" style="margin-top:6px">Responsable : ${esc(ph.lead)}</div>
-                </div>`;
-              }).join('')}
-            </div>
+              <span class="tag" id="prjPhasesCount">${p.phases.length} lots</span></div>
+            <div class="card__body stack" style="gap:16px" id="prjPhases">${renderPhases(p.phases)}</div>
           </section>
 
           <section class="card">
@@ -2977,17 +2981,35 @@ ERP.Components = ERP.Components || {};
         </div>
       </div>`;
 
-    /* Tâches : chaque ligne se pilote sur place */
+    /* Tâches : chaque ligne se pilote sur place — la progression globale,
+       l'avancement par lot et le planning en dépendent tous directement
+       (le serveur les recalcule à chaque changement de tâche), donc les
+       trois doivent se rafraîchir ici plutôt que d'attendre un rechargement
+       de la page pour refléter la vraie valeur. */
     ERP.Components.taskRows(view.querySelector('#prjTasks'), {
       projectId: p.id,
       onChange: async () => {
-        // Les compteurs d'en-tête suivent les modifications faites ligne par ligne
+        if (!view.isConnected) return; // l'utilisateur a déjà changé de page
         const fresh = await ERP.Api.projects.get(p.id);
+
         const kpi = view.querySelector('#prjTaskKpi');
-        if (!kpi) return;
-        kpi.querySelector('.kpi__foot').textContent =
-          `${fresh.tasksDone}/${fresh.tasksTotal} tâches terminées` +
-          (fresh.tasksLate ? ` · ${fresh.tasksLate} en retard` : '');
+        if (kpi) {
+          kpi.querySelector('.kpi__value').innerHTML = `${fresh.progress}<span>%</span>`;
+          kpi.querySelector('.kpi__foot').textContent =
+            `${fresh.tasksDone}/${fresh.tasksTotal} tâches terminées` +
+            (fresh.tasksLate ? ` · ${fresh.tasksLate} en retard` : '');
+        }
+
+        const phasesHost = view.querySelector('#prjPhases');
+        if (phasesHost) phasesHost.innerHTML = renderPhases(fresh.phases);
+        const phasesCount = view.querySelector('#prjPhasesCount');
+        if (phasesCount) phasesCount.textContent = fresh.phases.length + ' lots';
+
+        const ganttHost = view.querySelector('#prjGantt');
+        if (ganttHost) {
+          const rows = await ERP.Api.planning.rows({ projectId: p.id });
+          ERP.Gantt.render(ganttHost, rows, { scale: 'mois', compact: true });
+        }
       }
     });
 
