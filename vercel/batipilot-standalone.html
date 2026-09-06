@@ -347,6 +347,7 @@ button{ cursor:pointer; }
 .btn--sm{ min-height:40px; padding:0 14px; font-size:14px; }
 .btn--block{ width:100%; }
 .btn[disabled]{ opacity:.5; pointer-events:none; }
+.is-busy{ opacity:.5; pointer-events:none; }
 
 /* Segmented control (vues Jour/Semaine/Mois, Kanban/Liste) */
 .segmented{
@@ -1758,6 +1759,32 @@ window.ERP = window.ERP || {};
   const debounce = (fn, ms = 220) => {
     let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
   };
+
+  /* ---------- Anti double-clic global ----------
+     Chaque module câble son bouton « Enregistrer »/« Ajouter »/« Supprimer »
+     séparément (soit `bouton.onclick = async () => {...}`, soit une
+     délégation on(...)), sans jamais se désactiver pendant l'appel réseau —
+     un double ou triple clic avant la fin de la première requête envoyait
+     donc 2 ou 3 créations identiques. Plutôt que de retoucher chacun des
+     modules concernés, un seul verrou posé ici, en phase de capture sur le
+     document, intercepte le clic AVANT qu'il n'atteigne le gestionnaire du
+     bouton (direct ou délégué) tant qu'un premier clic sur ce même bouton
+     n'a pas eu le temps d'aboutir. `pointer-events:none` (posé via la
+     classe) bloque déjà la souris ; le verrou en attribut couvre aussi
+     l'activation clavier (Entrée/Espace), qui ignore pointer-events.
+     Volontairement limité aux actions à effet unique (créer/enregistrer/
+     supprimer/convertir/mouvement de stock) — jamais les compteurs,
+     pagination ou filtres, où cliquer plusieurs fois de suite est normal. */
+  const GUARDED_ACTIONS = '[data-save], [data-del], [data-del-project], [data-del-client], [data-in], [data-out], [data-return], [data-convert]';
+  const GUARD_MS = 1500;
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest(GUARDED_ACTIONS);
+    if (!el) return;
+    if (el.dataset.clickGuard) { e.preventDefault(); e.stopImmediatePropagation(); return; }
+    el.dataset.clickGuard = '1';
+    el.classList.add('is-busy');
+    setTimeout(() => { delete el.dataset.clickGuard; el.classList.remove('is-busy'); }, GUARD_MS);
+  }, true);
 
   /* =======================================================
      5. MODALES
