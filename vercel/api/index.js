@@ -299,6 +299,31 @@ async function recomputeProjectSpend(supa, projectId) {
   throwIfError(await supa.from('projects').update({ spent }).eq('id', projectId));
 }
 
+// "Progression globale" (projects.progress) and the "en_retard" alert
+// status were plain stored fields, set once at creation/edit and never
+// touched again — a task being completed, added or removed never fed
+// back into either one, so the top-of-page percentage and every "late"
+// badge/pill fed by it (dashboard sort order, nav pills, planning Gantt
+// colouring) silently drifted from the real state of the project's tasks.
+// Recomputed the same way as the budget above: derived fresh from the
+// live tasks after every create/update/delete, never incremented.
+// "termine" is a deliberate closure the ingénieur sets by hand and is
+// never overridden here; a project with no tasks yet keeps whatever
+// value was set manually (there is nothing real to derive it from).
+async function recomputeProjectProgress(supa, projectId) {
+  const { data: proj } = await supa.from('projects').select('status,end').eq('id', projectId).maybeSingle();
+  if (!proj || proj.status === 'termine') return;
+  const { data: tasks } = await supa.from('tasks').select('progress,status,due').eq('project_id', projectId);
+  if (!tasks || !tasks.length) return;
+
+  const progress = Math.round(tasks.reduce((s, t) => s + Number(t.progress || 0), 0) / tasks.length);
+  const hasOverdueTask = tasks.some(isLate);
+  const projectOverdue = proj.end && proj.end < today() && progress < 100;
+  const status = (hasOverdueTask || projectOverdue) ? 'en_retard' : (progress > 0 ? 'en_cours' : 'en_preparation');
+
+  throwIfError(await supa.from('projects').update({ progress, status }).eq('id', projectId));
+}
+
 /* =========================================================
    Express
    ========================================================= */
@@ -775,6 +800,7 @@ api.post('/tasks', async (req, res, next) => {
         }];
         await req.supa.from('projects').update({ phases }).eq('id', row.project_id);
       }
+      await recomputeProjectProgress(req.supa, row.project_id);
     }
     ok(res, row, 201);
   } catch (e) { next(e); }
@@ -793,6 +819,7 @@ api.patch('/tasks/:id', async (req, res, next) => {
           : ph);
         await req.supa.from('projects').update({ phases }).eq('id', t.project_id);
       }
+      await recomputeProjectProgress(req.supa, t.project_id);
     }
     ok(res, t);
   } catch (e) { next(e); }
@@ -809,6 +836,7 @@ api.delete('/tasks/:id', async (req, res, next) => {
       }
     }
     throwIfError(await req.supa.from('tasks').delete().eq('id', req.params.id));
+    if (t && t.project_id) await recomputeProjectProgress(req.supa, t.project_id);
     res.status(204).end();
   } catch (e) { next(e); }
 });
