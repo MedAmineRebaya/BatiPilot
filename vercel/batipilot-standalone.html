@@ -3752,7 +3752,13 @@ window.ERP = window.ERP || {};
     // pointage réel : on ouvre le formulaire comme pour une création, avec
     // Présent proposé par défaut plutôt que le statut Absent provisoire.
     const existing = found && !found.pending ? found : null;
-    const w = workerId ? workers.find(x => x.id === workerId) : null;
+    // Quand le formulaire s'ouvre sans ouvrier précis (bouton général
+    // « Ajouter un pointage », pas une ligne particulière), le <select>
+    // Ouvrier retombe sur son premier <option> par défaut — le champ
+    // Chantier doit refléter CE choix par défaut, pas rester bloqué sur le
+    // premier chantier de la liste sans rapport avec l'ouvrier réellement
+    // sélectionné (voir la synchronisation posée plus bas sur #f-worker).
+    const w = workerId ? workers.find(x => x.id === workerId) : workers[0];
 
     const m = ERP.UI.modal({
       title: existing ? 'Modifier le pointage' : 'Ajouter un pointage',
@@ -3800,6 +3806,15 @@ window.ERP = window.ERP || {};
     }
     ['#f-in', '#f-out', '#f-break', '#f-status'].forEach(s => g(s).addEventListener('input', total));
     total();
+
+    // Garde le Chantier synchronisé avec l'ouvrier choisi : sans ça, changer
+    // l'ouvrier dans ce même formulaire laissait le chantier sur sa valeur
+    // précédente (le premier de la liste par défaut), et le pointage
+    // s'enregistrait pour le mauvais chantier sans que rien ne le signale.
+    g('#f-worker').addEventListener('change', () => {
+      const picked = workers.find(x => x.id === g('#f-worker').value);
+      if (picked && picked.projectId) g('#f-project').value = picked.projectId;
+    });
 
     m.foot.querySelector('[data-cancel]').onclick = m.close;
     m.foot.querySelector('[data-save]').onclick = async () => {
