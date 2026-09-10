@@ -202,6 +202,10 @@ create table if not exists project_materials (
   author text not null default ''
 );
 
+-- Pas de unique(date, worker_id) : un ouvrier peut être pointé sur
+-- plusieurs chantiers le même jour (ex. 7h-12h sur un chantier, 13h-fin
+-- sur un autre). La non-superposition des horaires est vérifiée côté
+-- API (POST/PATCH /timesheets), pas par une contrainte de table.
 create table if not exists timesheets (
   id text primary key,
   date date not null,
@@ -214,8 +218,7 @@ create table if not exists timesheets (
   break_min int not null default 0,
   hours numeric not null default 0,
   status text not null default 'present',
-  note text not null default '',
-  unique (date, worker_id)
+  note text not null default ''
 );
 
 create table if not exists task_catalog (
@@ -262,6 +265,12 @@ alter table quotes add column if not exists city text not null default '';
 alter table quotes add column if not exists valid_until date;
 alter table quotes add column if not exists start_date date;
 alter table quotes add column if not exists months int not null default 8;
+
+-- Migration for databases created before multi-chantier pointage:
+-- un ouvrier ne pouvait être pointé que sur un seul chantier par jour.
+-- Le nom par défaut de la contrainte auto-générée par Postgres pour
+-- `unique (date, worker_id)` est `timesheets_date_worker_id_key`.
+alter table timesheets drop constraint if exists timesheets_date_worker_id_key;
 
 create table if not exists expenses (
   id text primary key,

@@ -241,9 +241,12 @@ async function decorateClient(supa, c) {
 
 async function decorateWorker(supa, w) {
   const t = today();
-  const [{ data: p }, { data: entry }, { data: monthRows }] = await Promise.all([
+  const [{ data: p }, { data: entries }, { data: monthRows }] = await Promise.all([
     w.project_id ? supa.from('projects').select('name,status').eq('id', w.project_id).maybeSingle() : { data: null },
-    supa.from('timesheets').select('*').eq('worker_id', w.id).eq('date', t).maybeSingle(),
+    // Un ouvrier peut avoir plusieurs pointages le même jour (plusieurs
+    // chantiers dans la même journée) depuis que timesheets n'a plus de
+    // contrainte unique(date, worker_id) — voir POST /timesheets.
+    supa.from('timesheets').select('*').eq('worker_id', w.id).eq('date', t),
     supa.from('timesheets').select('hours,date').eq('worker_id', w.id).gte('date', dt.add(t, -30))
   ]);
   const monthHours = (monthRows || []).reduce((s, r) => s + Number(r.hours || 0), 0);
@@ -253,11 +256,17 @@ async function decorateWorker(supa, w) {
   // la feuille de pointage affichent deux statuts différents pour le même
   // ouvrier le même jour.
   const scheduledToday = !!(p && p.status !== 'termine');
+  const todayEntries = entries || [];
+  const todayStatus = todayEntries.some((e) => e.status === 'present') ? 'present'
+    : todayEntries.some((e) => e.status === 'retard') ? 'retard'
+    : todayEntries.length ? 'absent'
+    : (scheduledToday ? 'absent' : 'non_planifie');
   return {
     ...w,
     project_name: p ? p.name : 'Non affecté',
-    today_status: entry ? entry.status : (scheduledToday ? 'absent' : 'non_planifie'),
-    today_entry: entry || null,
+    today_status: todayStatus,
+    today_entries: todayEntries,
+    today_hours: todayEntries.reduce((s, e) => s + Number(e.hours || 0), 0),
     month_hours: Math.round(monthHours),
     month_cost: Math.round(monthHours * w.rate)
   };
@@ -666,6 +675,10 @@ api.get('/timesheets', async (req, res, next) => {
     if (req.query.trade && req.query.trade !== 'tous') rows = rows.filter((r) => r.trade === req.query.trade);
     if (req.query.status && req.query.status !== 'tous') rows = rows.filter((r) => r.status === req.query.status);
     if (req.query.q) rows = rows.filter((r) => r.worker.toLowerCase().includes(String(req.query.q).toLowerCase()));
+    // Regroupe les lignes d'un même ouvrier (plusieurs chantiers dans la
+    // journée) plutôt que de les laisser dispersées dans l'ordre de retour
+    // de la requête.
+    rows.sort((a, b) => a.worker.localeCompare(b.worker) || (a.in ?? 9999) - (b.in ?? 9999));
     ok(res, rows);
   } catch (e) { next(e); }
 });
@@ -678,31 +691,69 @@ api.get('/timesheets/summary', async (req, res, next) => {
     const workerIds = [...new Set(present.map((r) => r.worker_id))];
     const { data: workers } = workerIds.length ? await req.supa.from('workers').select('id,rate').in('id', workerIds) : { data: [] };
     const rateById = Object.fromEntries((workers || []).map((w) => [w.id, w.rate]));
+    // Un ouvrier avec deux pointages le même jour (deux chantiers) ne doit
+    // compter que pour UNE personne dans "prévus/présents/absents/retards" —
+    // seules les heures et le coût s'additionnent naturellement sur les
+    // lignes. On calcule donc ces quatre compteurs sur des ensembles
+    // d'ouvriers distincts plutôt que sur le nombre de lignes.
+    const distinctWorkers = (pred) => new Set(rows.filter(pred).map((r) => r.worker_id)).size;
     ok(res, {
       date,
-      scheduled: rows.length,
-      present: present.length,
-      absent: rows.filter((r) => r.status === 'absent').length,
-      late: rows.filter((r) => r.status === 'retard').length,
+      scheduled: new Set(rows.map((r) => r.worker_id)).size,
+      // "présent" = pas absent (couvre aussi "retard", comme avant le
+      // support multi-chantier) ; "late" reste un sous-ensemble affiché à
+      // part ("X arrivées tardives"), pas une catégorie exclusive.
+      present: distinctWorkers((r) => r.status !== 'absent'),
+      absent: distinctWorkers((r) => r.status === 'absent'),
+      late: distinctWorkers((r) => r.status === 'retard'),
       hours: present.reduce((s, r) => s + Number(r.hours || 0), 0),
       cost: Math.round(present.reduce((s, r) => s + Number(r.hours || 0) * (rateById[r.worker_id] || 15), 0))
     });
   } catch (e) { next(e); }
 });
 
+const toHHMMServer = (min) => min == null ? '?' : `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+
+/* Un ouvrier peut être pointé sur plusieurs chantiers le même jour (ex.
+   7h-12h sur un chantier, 13h-fin sur un autre) — timesheets n'a donc
+   plus de contrainte unique(date, worker_id). La seule règle métier que
+   ça laisse à faire respecter : il ne peut pas être à deux endroits en
+   même temps. `excludeId` sert au PATCH, pour ne pas comparer une ligne
+   à elle-même. */
+async function assertNoTimeOverlap(supa, { workerId, date, in: inMin, out: outMin, status, excludeId }) {
+  if (status === 'absent' || inMin == null || outMin == null) return;
+  let q = supa.from('timesheets').select('id,in,out,project_id').eq('worker_id', workerId).eq('date', date).neq('status', 'absent');
+  if (excludeId) q = q.neq('id', excludeId);
+  const { data: others, error } = await q;
+  if (error) throw error;
+  const conflict = (others || []).find((o) => o.in != null && o.out != null && inMin < o.out && o.in < outMin);
+  if (conflict) {
+    const { data: proj } = conflict.project_id
+      ? await supa.from('projects').select('name').eq('id', conflict.project_id).maybeSingle()
+      : { data: null };
+    const err = new Error(
+      `Chevauchement horaire : cet ouvrier est déjà pointé${proj ? ' sur ' + proj.name : ''} de ${toHHMMServer(conflict.in)} à ${toHHMMServer(conflict.out)} ce jour-là.`
+    );
+    err.status = 409;
+    throw err;
+  }
+}
+
 api.post('/timesheets', async (req, res, next) => {
   try {
     const entry = req.body || {};
     const date = entry.date || today();
+    await assertNoTimeOverlap(req.supa, { workerId: entry.workerId, date, in: entry.in, out: entry.out, status: entry.status });
     const { data: worker } = await req.supa.from('workers').select('name,trade').eq('id', entry.workerId).maybeSingle();
     const hours = Math.max(0, (entry.out - entry.in - entry.breakMin) / 60);
+    const id = await nextId('timesheets', 'PTG-');
     const row = {
-      id: `PTG-${date}-${entry.workerId}`, date, worker_id: entry.workerId,
+      id, date, worker_id: entry.workerId,
       worker: worker ? worker.name : '—', trade: worker ? worker.trade : '—',
       project_id: entry.projectId, in: entry.in, out: entry.out, break_min: entry.breakMin,
       hours, status: entry.status || (entry.in > 435 ? 'retard' : 'present'), note: entry.note || ''
     };
-    throwIfError(await req.supa.from('timesheets').upsert(row));
+    throwIfError(await req.supa.from('timesheets').insert(row));
     ok(res, row, 201);
   } catch (e) { next(e); }
 });
@@ -715,6 +766,12 @@ api.patch('/timesheets/:id', async (req, res, next) => {
     const merged = { ...existing, ...patch };
     if (patch.in != null || patch.out != null || patch.break_min != null) {
       merged.hours = Math.max(0, (merged.out - merged.in - (merged.break_min || 0)) / 60);
+    }
+    if (patch.in != null || patch.out != null || patch.status != null) {
+      await assertNoTimeOverlap(req.supa, {
+        workerId: merged.worker_id, date: merged.date, in: merged.in, out: merged.out,
+        status: merged.status, excludeId: req.params.id
+      });
     }
     const { data, error } = await req.supa.from('timesheets').update(merged).eq('id', req.params.id).select().maybeSingle();
     if (error) throw error;
@@ -1513,7 +1570,11 @@ app.use((err, req, res, next) => {
   // was correctly blocked by a policy — that's a permissions problem
   // (403), not a server fault (500).
   const isRlsBlock = err.code === '42501' || /row-level security policy/i.test(err.message || '');
-  res.status(isRlsBlock ? 403 : 500).json({ error: isRlsBlock ? 'forbidden' : (err.message || 'server_error') });
+  if (isRlsBlock) return res.status(403).json({ error: 'forbidden' });
+  // A handler can throw an Error with a `status` (e.g. assertNoTimeOverlap's
+  // 409) to surface a specific, user-facing message instead of the generic
+  // 500 — the message is meant to reach the toast the user sees.
+  res.status(err.status || 500).json({ error: err.message || 'server_error' });
 });
 
 module.exports = app;

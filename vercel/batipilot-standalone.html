@@ -1779,7 +1779,7 @@ window.ERP = window.ERP || {};
      Volontairement limité aux actions à effet unique (créer/enregistrer/
      supprimer/convertir/mouvement de stock) — jamais les compteurs,
      pagination ou filtres, où cliquer plusieurs fois de suite est normal. */
-  const GUARDED_ACTIONS = '[data-save], [data-del], [data-del-project], [data-del-client], [data-in], [data-out], [data-return], [data-convert], [data-quick-point]';
+  const GUARDED_ACTIONS = '[data-save], [data-del], [data-del-project], [data-del-client], [data-in], [data-out], [data-return], [data-convert], [data-quick-point], [data-add-shift]';
   const GUARD_MS = 1500;
   document.addEventListener('click', (e) => {
     const el = e.target.closest(GUARDED_ACTIONS);
@@ -2875,6 +2875,25 @@ ERP.Components = ERP.Components || {};
     }).join('');
   }
 
+  /* « Équipe sur site » doit montrer qui travaille VRAIMENT ici aujourd'hui,
+     pas seulement les ouvriers dont ce chantier est l'affectation par
+     défaut (workers.projectId) — depuis qu'un ouvrier peut être pointé sur
+     plusieurs chantiers le même jour, quelqu'un peut très bien passer
+     l'après-midi ici sans y être rattaché en permanence. On complète donc
+     la liste avec les ouvriers qui n'ont un pointage QUE ponctuel sur ce
+     chantier aujourd'hui, à partir des lignes déjà chargées pour les
+     compteurs (aucun appel réseau supplémentaire). */
+  function mergeAdHocWorkers(homeWorkers, todayRows) {
+    const known = new Set(homeWorkers.map(w => w.id));
+    const extra = [];
+    for (const r of todayRows) {
+      if (r.pending || known.has(r.workerId)) continue;
+      known.add(r.workerId);
+      extra.push({ id: r.workerId, name: r.worker, trade: r.trade, projectId: null, todayStatus: r.status });
+    }
+    return [...homeWorkers, ...extra];
+  }
+
   /* Extrait de même pour « Équipe sur site » : réutilisé par le
      rafraîchissement en direct déclenché par le pointage rapide. */
   function renderTeam(p, workers) {
@@ -2906,11 +2925,13 @@ ERP.Components = ERP.Components || {};
     const p = await ERP.Api.projects.get(params.id);
     if (!p) { view.innerHTML = ERP.UI.empty('Projet introuvable', 'Ce chantier n\'existe pas ou a été archivé.'); return; }
 
-    const [tasks, workers, attachments] = await Promise.all([
+    const [tasks, homeWorkers, attachments, todayRows] = await Promise.all([
       ERP.Api.tasks.list({ projectId: p.id }),
       ERP.Api.workers.list({ projectId: p.id }),
-      ERP.Api.attachments.list(p.id)
+      ERP.Api.attachments.list(p.id),
+      ERP.Api.timesheets.list({ date: ERP.DB.today, projectId: p.id })
     ]);
+    const workers = mergeAdHocWorkers(homeWorkers, todayRows);
     const daysLeft = ERP.dt.diff(ERP.DB.today, p.end);
 
     view.innerHTML = `
@@ -3151,9 +3172,10 @@ ERP.Components = ERP.Components || {};
         return;
       }
       if (!view.isConnected) return; // l'utilisateur a déjà changé de page
-      const [freshP, freshWorkers] = await Promise.all([
+      const [freshP, freshHomeWorkers, freshTodayRows] = await Promise.all([
         ERP.Api.projects.get(p.id),
-        ERP.Api.workers.list({ projectId: p.id })
+        ERP.Api.workers.list({ projectId: p.id }),
+        ERP.Api.timesheets.list({ date: ERP.DB.today, projectId: p.id })
       ]);
       const kpi = view.querySelector('#prjTeamKpi');
       if (kpi) {
@@ -3161,7 +3183,7 @@ ERP.Components = ERP.Components || {};
         kpi.querySelector('.kpi__foot').textContent = `${fmt.hours(freshP.hoursToday)} pointées aujourd'hui`;
       }
       const teamHost = view.querySelector('#prjTeam');
-      if (teamHost) teamHost.innerHTML = renderTeam(freshP, freshWorkers);
+      if (teamHost) teamHost.innerHTML = renderTeam(freshP, mergeAdHocWorkers(freshHomeWorkers, freshTodayRows));
     });
   }
 
@@ -3624,7 +3646,10 @@ window.ERP = window.ERP || {};
           <td class="t-right"><span class="hours-cell">${r.status === 'absent' ? '—' : fmt.hours(r.hours)}</span></td>
           <td>${span}</td>
           <td>${badge('presence', r.status)}</td>
-          <td class="t-right"><button class="icon-btn icon-btn--ghost write-guard" data-edit="${r.workerId}" aria-label="Modifier le pointage">${icon('edit', 18)}</button></td>
+          <td class="t-right">
+            <button class="icon-btn icon-btn--ghost write-guard" data-edit="${r.id}" aria-label="Modifier le pointage">${icon('edit', 18)}</button>
+            ${r.pending ? '' : `<button class="icon-btn icon-btn--ghost write-guard" data-add-shift="${r.workerId}" aria-label="Ajouter un autre chantier ce jour-là" title="Ajouter un autre chantier ce jour-là">${icon('plus', 18)}</button>`}
+          </td>
         </tr>`;
       }).join('');
     }
@@ -3640,14 +3665,15 @@ window.ERP = window.ERP || {};
       view.querySelectorAll('#ptStatus .chip').forEach(c => c.classList.toggle('is-active', c === t));
       refresh();
     });
-    view.querySelector('#ptAdd').onclick = () => openForm(null, refresh);
+    view.querySelector('#ptAdd').onclick = () => openForm({}, refresh);
     view.querySelector('#ptProject').onchange = (e) => { state.projectId = e.target.value; refresh(); };
     view.querySelector('#ptTrade').onchange = (e) => { state.trade = e.target.value; refresh(); };
     view.querySelector('#ptSearch').addEventListener('input', ERP.UI.debounce(e => { state.q = e.target.value; refresh(); }, 200));
     view.querySelector('#ptWorker').onclick = () => openWorkerForm(null, refresh);
     view.querySelector('#ptExport').onclick = () => toast(
       (state.view === 'tous' ? 'Liste des ouvriers exportée' : 'Feuille de pointage exportée') + ' (CSV simulé)', 'ok');
-    on(view, 'click', '[data-edit]', (e, t) => openForm(t.dataset.edit, refresh));
+    on(view, 'click', '[data-edit]', (e, t) => openForm({ entryId: t.dataset.edit }, refresh));
+    on(view, 'click', '[data-add-shift]', (e, t) => openForm({ presetWorkerId: t.dataset.addShift }, refresh));
     on(view, 'click', '[data-edit-worker]', (e, t) => {
       const w = ERP.DB.workers.find(x => x.id === t.dataset.editWorker);
       if (w) openWorkerForm(w, refresh);
@@ -3660,7 +3686,7 @@ window.ERP = window.ERP || {};
       // la remontée vers des ancêtres, pas entre écouteurs d'un même nœud)
       // — d'où ce garde-fou explicite, déjà utilisé pour la fiche fournisseur
       // (cf. [data-call] / [data-id] plus haut dans le fichier).
-      if (e.target.closest('[data-edit], [data-edit-worker]')) return;
+      if (e.target.closest('[data-edit], [data-edit-worker], [data-add-shift]')) return;
       ERP.Router.go('/pointage/' + t.dataset.worker);
     });
   }
@@ -3741,17 +3767,26 @@ window.ERP = window.ERP || {};
     }
   }
 
-  async function openForm(workerId, done) {
+  async function openForm({ entryId = null, presetWorkerId = null } = {}, done) {
     const workers = ERP.DB.workers;
     const projects = ERP.DB.projects.filter(p => p.status !== 'termine');
-    const found = workerId
-      ? (await ERP.Api.timesheets.list({ date: state.date })).find(r => r.workerId === workerId)
+    // Un ouvrier peut désormais avoir plusieurs pointages le même jour (un
+    // par chantier) — entryId cible UNE ligne précise à modifier ; sans lui,
+    // le formulaire est toujours en création, y compris pour un ouvrier qui
+    // a déjà un pointage ce jour-là (cf. le bouton "+" par ligne, qui permet
+    // justement d'ajouter un second chantier plutôt que d'écraser le premier).
+    const found = entryId
+      ? (await ERP.Api.timesheets.list({ date: state.date })).find(r => r.id === entryId)
       : null;
     // Une ligne "en attente" (ouvrier affecté à un chantier mais pas encore
     // pointé ce jour-là, voir scheduledTimesheetRows côté API) n'est pas un
     // pointage réel : on ouvre le formulaire comme pour une création, avec
     // Présent proposé par défaut plutôt que le statut Absent provisoire.
     const existing = found && !found.pending ? found : null;
+    // Le crayon d'une ligne "en attente" passe son id synthétique en
+    // entryId (pour rester cohérent avec les lignes réelles) : found porte
+    // alors le bon ouvrier même si existing reste null (voir plus haut).
+    const workerId = existing ? existing.workerId : (found ? found.workerId : presetWorkerId);
     // Quand le formulaire s'ouvre sans ouvrier précis (bouton général
     // « Ajouter un pointage », pas une ligne particulière), le <select>
     // Ouvrier retombe sur son premier <option> par défaut — le champ
@@ -3768,7 +3803,7 @@ window.ERP = window.ERP || {};
           <div class="field field--full">
             <label for="f-worker">Ouvrier</label>
             <select id="f-worker">${workers.map(x =>
-              `<option value="${x.id}" ${workerId === x.id ? 'selected' : ''}>${esc(x.name)} — ${esc(x.trade)}</option>`).join('')}</select>
+              `<option value="${x.id}" ${(w ? w.id : workers[0] && workers[0].id) === x.id ? 'selected' : ''}>${esc(x.name)} — ${esc(x.trade)}</option>`).join('')}</select>
           </div>
           <div class="field">
             <label for="f-project">Chantier</label>
@@ -3824,7 +3859,7 @@ window.ERP = window.ERP || {};
         toast('L\'heure de départ doit être postérieure à l\'heure d\'arrivée', 'danger');
         return;
       }
-      await ERP.Api.timesheets.create({
+      const payload = {
         workerId: g('#f-worker').value,
         projectId: g('#f-project').value,
         date: g('#f-date').value,
@@ -3833,8 +3868,20 @@ window.ERP = window.ERP || {};
         breakMin: status === 'absent' ? 0 : (+g('#f-break').value || 0),
         status,
         note: g('#f-note').value.trim()
-      });
-      state.date = g('#f-date').value;
+      };
+      try {
+        // `existing` seul distingue édition/création : depuis que
+        // timesheets accepte plusieurs lignes par ouvrier et par jour, un
+        // id séquentiel est généré à chaque création (voir POST
+        // /timesheets) — retomber sur .create() ici écrirait une ligne en
+        // plus au lieu de corriger celle qu'on est en train de modifier.
+        if (existing) await ERP.Api.timesheets.update(existing.id, payload);
+        else await ERP.Api.timesheets.create(payload);
+      } catch (err) {
+        toast(err.message ? err.message.replace(/^\d+\s*/, '') : 'Erreur lors de l\'enregistrement', 'danger');
+        return;
+      }
+      state.date = payload.date;
       m.close();
       toast('Pointage enregistré', 'ok');
       if (done) done();
@@ -3845,6 +3892,7 @@ window.ERP = window.ERP || {};
      FICHE OUVRIER
      ======================================================= */
   async function renderWorker(params, view) {
+    if (!state.date) state.date = ERP.DB.today; // openForm() en dépend pour le champ Date
     const w = await ERP.Api.workers.get(params.id);
     if (!w) { view.innerHTML = ERP.UI.empty('Ouvrier introuvable', 'Cette fiche n\'existe pas.'); return; }
 
@@ -3854,7 +3902,9 @@ window.ERP = window.ERP || {};
       if (!dt.isWeekend(d)) days.push(d);
     }
     const dayRows = await Promise.all(days.map((d) => ERP.Api.timesheets.list({ date: d })));
-    const history = dayRows.map((rows) => rows.find((t) => t.workerId === w.id)).filter(Boolean);
+    // Un même jour peut porter plusieurs lignes pour cet ouvrier (plusieurs
+    // chantiers) — .filter() plutôt que .find() pour toutes les garder.
+    const history = dayRows.flatMap((rows) => rows.filter((t) => t.workerId === w.id && !t.pending));
 
     view.innerHTML = `
       <div class="backbar">
@@ -3873,7 +3923,7 @@ window.ERP = window.ERP || {};
 
       <div class="kpis" style="grid-template-columns:repeat(4,minmax(0,1fr))">
         <div class="kpi"><div class="kpi__top"><span class="kpi__ico kpi__ico--orange">${icon('clock', 19)}</span><span class="kpi__label">Heures — 30 derniers jours</span></div>
-          <div class="kpi__value num">${w.monthHours}<span>h</span></div><div class="kpi__foot">Sur ${history.length} jours pointés</div></div>
+          <div class="kpi__value num">${w.monthHours}<span>h</span></div><div class="kpi__foot">Sur ${new Set(history.map(e => e.date)).size} jours pointés</div></div>
         <div class="kpi"><div class="kpi__top"><span class="kpi__ico">${icon('wallet', 19)}</span><span class="kpi__label">Coût main-d'œuvre</span></div>
           <div class="kpi__value num">${fmt.moneyShort(w.monthCost)}</div><div class="kpi__foot">${w.rate} DT / heure</div></div>
         <div class="kpi"><div class="kpi__top"><span class="kpi__ico">${icon('building', 19)}</span><span class="kpi__label">Chantier affecté</span></div>
@@ -3924,16 +3974,20 @@ window.ERP = window.ERP || {};
         </div>
       </div>`;
 
-    const h = history.slice().reverse();
+    // Un jour à deux chantiers ne doit faire qu'une barre — les heures de
+    // ses différentes lignes s'additionnent avant le tracé.
+    const hoursByDate = new Map();
+    history.forEach(e => hoursByDate.set(e.date, (hoursByDate.get(e.date) || 0) + Number(e.hours || 0)));
+    const h = [...hoursByDate.entries()].sort((a, b) => a[0].localeCompare(b[0]));
     ERP.Charts.bars(view.querySelector('#wkChart'), {
-      labels: h.map(e => fmt.dateShort(e.date)),
-      series: [{ name: 'Heures', color: ERP.Charts.colors.navy, data: h.map(e => +e.hours.toFixed(1)) }],
+      labels: h.map(([date]) => fmt.dateShort(date)),
+      series: [{ name: 'Heures', color: ERP.Charts.colors.navy, data: h.map(([, hours]) => +hours.toFixed(1)) }],
       formatter: (v) => v + ' h', height: 240
     });
 
     view.querySelector('[data-back]').onclick = () => history.length ? window.history.back() : ERP.Router.go('/pointage');
     view.querySelector('[data-call]').onclick = () => toast('Appel vers ' + w.phone + ' (simulé)', 'info');
-    view.querySelector('[data-point]').onclick = () => openForm(w.id, () => renderWorker(params, view));
+    view.querySelector('[data-point]').onclick = () => openForm({ presetWorkerId: w.id }, () => renderWorker(params, view));
     view.querySelector('[data-edit-worker]').onclick = () => openWorkerForm(w, () => renderWorker(params, view));
   }
 
