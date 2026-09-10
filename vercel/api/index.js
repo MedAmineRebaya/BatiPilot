@@ -242,15 +242,21 @@ async function decorateClient(supa, c) {
 async function decorateWorker(supa, w) {
   const t = today();
   const [{ data: p }, { data: entry }, { data: monthRows }] = await Promise.all([
-    w.project_id ? supa.from('projects').select('name').eq('id', w.project_id).maybeSingle() : { data: null },
+    w.project_id ? supa.from('projects').select('name,status').eq('id', w.project_id).maybeSingle() : { data: null },
     supa.from('timesheets').select('*').eq('worker_id', w.id).eq('date', t).maybeSingle(),
     supa.from('timesheets').select('hours,date').eq('worker_id', w.id).gte('date', dt.add(t, -30))
   ]);
   const monthHours = (monthRows || []).reduce((s, r) => s + Number(r.hours || 0), 0);
+  // Même règle que scheduledTimesheetRows (feuille de pointage) : un ouvrier
+  // affecté à un chantier en cours mais pas encore pointé aujourd'hui est
+  // "absent" (à pointer), pas "non planifié" — sinon la fiche chantier et
+  // la feuille de pointage affichent deux statuts différents pour le même
+  // ouvrier le même jour.
+  const scheduledToday = !!(p && p.status !== 'termine');
   return {
     ...w,
     project_name: p ? p.name : 'Non affecté',
-    today_status: entry ? entry.status : 'non_planifie',
+    today_status: entry ? entry.status : (scheduledToday ? 'absent' : 'non_planifie'),
     today_entry: entry || null,
     month_hours: Math.round(monthHours),
     month_cost: Math.round(monthHours * w.rate)
@@ -402,17 +408,17 @@ api.get('/dashboard/kpis', async (req, res, next) => {
     const { data: projects } = await supa.from('projects').select('*');
     const active = (projects || []).filter((x) => x.status !== 'termine');
     const done = (projects || []).filter((x) => x.status === 'termine');
-    const { data: ts } = await supa.from('timesheets').select('status,hours').eq('date', t);
-    const present = (ts || []).filter((x) => x.status !== 'absent');
+    const ts = await scheduledTimesheetRows(supa, t);
+    const present = ts.filter((x) => x.status !== 'absent');
     const { data: tasks } = await supa.from('tasks').select('status,due');
     const budget = active.reduce((s, x) => s + x.budget, 0);
     const spent = active.reduce((s, x) => s + x.spent, 0);
     ok(res, {
       active_projects: active.length,
       done_projects: done.length,
-      scheduled: (ts || []).length,
+      scheduled: ts.length,
       present: present.length,
-      absent: (ts || []).length - present.length,
+      absent: ts.length - present.length,
       hours_today: present.reduce((s, x) => s + Number(x.hours || 0), 0),
       late_tasks: (tasks || []).filter((t2) => isLate({ status: t2.status, due: t2.due })).length,
       late_projects: active.filter((x) => x.status === 'en_retard').length,
@@ -622,40 +628,62 @@ api.delete('/workers/:id', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-/* ---- Timesheets ---- */
+/* ---- Timesheets ----
+   Un ouvrier simplement affecté à un chantier (workers.project_id) n'a pas
+   pour autant de ligne dans `timesheets` tant que personne ne l'a pointé ce
+   jour-là : sans complément, la feuille de pointage d'un chantier tout
+   juste doté d'ouvriers restait vide. `scheduledTimesheetRows` complète
+   donc les lignes réelles du jour par une ligne "absent" provisoire pour
+   chaque ouvrier actif affecté à un chantier en cours qui n'a pas encore
+   été pointé, afin qu'il apparaisse immédiatement sur la feuille — prêt à
+   être modifié — plutôt que de rester invisible jusqu'à la création
+   manuelle d'un premier pointage. */
+async function scheduledTimesheetRows(supa, date) {
+  const { data: realRows, error } = await supa.from('timesheets').select('*').eq('date', date);
+  if (error) throw error;
+  const { data: workers } = await supa.from('workers').select('id,name,trade,project_id,status').eq('status', 'actif').not('project_id', 'is', null);
+  const { data: projects } = await supa.from('projects').select('id,name,status');
+  const nameById = Object.fromEntries((projects || []).map((p) => [p.id, p.name]));
+  const activeProjectIds = new Set((projects || []).filter((p) => p.status !== 'termine').map((p) => p.id));
+
+  const pointedWorkerIds = new Set((realRows || []).map((r) => r.worker_id));
+  const placeholders = (workers || [])
+    .filter((w) => activeProjectIds.has(w.project_id) && !pointedWorkerIds.has(w.id))
+    .map((w) => ({
+      id: `PTG-${date}-${w.id}`, date, worker_id: w.id, worker: w.name, trade: w.trade,
+      project_id: w.project_id, in: null, out: null, break_min: 0, hours: 0,
+      status: 'absent', note: '', pending: true
+    }));
+
+  return [...(realRows || []), ...placeholders].map((r) => ({ ...r, project_name: nameById[r.project_id] || '—' }));
+}
+
 api.get('/timesheets', async (req, res, next) => {
   try {
     const date = req.query.date || today();
-    let q = req.supa.from('timesheets').select('*').eq('date', date);
-    if (req.query.projectId && req.query.projectId !== 'tous') q = q.eq('project_id', req.query.projectId);
-    if (req.query.trade && req.query.trade !== 'tous') q = q.eq('trade', req.query.trade);
-    if (req.query.status && req.query.status !== 'tous') q = q.eq('status', req.query.status);
-    const { data, error } = await q;
-    if (error) throw error;
-    let rows = data || [];
+    let rows = await scheduledTimesheetRows(req.supa, date);
+    if (req.query.projectId && req.query.projectId !== 'tous') rows = rows.filter((r) => r.project_id === req.query.projectId);
+    if (req.query.trade && req.query.trade !== 'tous') rows = rows.filter((r) => r.trade === req.query.trade);
+    if (req.query.status && req.query.status !== 'tous') rows = rows.filter((r) => r.status === req.query.status);
     if (req.query.q) rows = rows.filter((r) => r.worker.toLowerCase().includes(String(req.query.q).toLowerCase()));
-    const projIds = [...new Set(rows.map((r) => r.project_id).filter(Boolean))];
-    const { data: projs } = projIds.length ? await req.supa.from('projects').select('id,name').in('id', projIds) : { data: [] };
-    const nameById = Object.fromEntries((projs || []).map((p) => [p.id, p.name]));
-    ok(res, rows.map((r) => ({ ...r, project_name: nameById[r.project_id] || '—' })));
+    ok(res, rows);
   } catch (e) { next(e); }
 });
 
 api.get('/timesheets/summary', async (req, res, next) => {
   try {
     const date = req.query.date || today();
-    const { data: rows, error } = await req.supa.from('timesheets').select('*').eq('date', date);
-    if (error) throw error;
-    const present = (rows || []).filter((r) => r.status !== 'absent');
+    const rows = await scheduledTimesheetRows(req.supa, date);
+    const present = rows.filter((r) => r.status !== 'absent');
     const workerIds = [...new Set(present.map((r) => r.worker_id))];
     const { data: workers } = workerIds.length ? await req.supa.from('workers').select('id,rate').in('id', workerIds) : { data: [] };
     const rateById = Object.fromEntries((workers || []).map((w) => [w.id, w.rate]));
     ok(res, {
       date,
-      scheduled: (rows || []).length,
+      scheduled: rows.length,
       present: present.length,
-      absent: (rows || []).filter((r) => r.status === 'absent').length,
-      late: (rows || []).filter((r) => r.status === 'retard').length,
+      absent: rows.filter((r) => r.status === 'absent').length,
+      late: rows.filter((r) => r.status === 'retard').length,
       hours: present.reduce((s, r) => s + Number(r.hours || 0), 0),
       cost: Math.round(present.reduce((s, r) => s + Number(r.hours || 0) * (rateById[r.worker_id] || 15), 0))
     });

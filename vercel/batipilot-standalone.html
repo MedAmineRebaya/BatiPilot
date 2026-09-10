@@ -698,7 +698,7 @@ button.kpi:hover{ box-shadow:var(--shadow-2); transform:translateY(-2px); }
   border-left:0; border-right:0; border-top:0; text-align:left; min-height:64px;
 }
 .list-row:last-child{ border-bottom:0; }
-button.list-row:hover{ background:var(--surface-2); }
+.list-row:hover{ background:var(--surface-2); }
 .list-row__ico{ width:38px; height:38px; border-radius:11px; display:grid; place-items:center; flex:none; background:var(--surface-3); color:var(--muted); }
 .list-row__txt{ min-width:0; flex:1; }
 .list-row__txt strong{ display:block; font-size:14.5px; font-weight:600; line-height:1.3; }
@@ -1694,6 +1694,10 @@ window.ERP = window.ERP || {};
       actif: ['Actif', 'badge badge--ok'],
       occasionnel: ['Occasionnel', 'badge']
     },
+    worker: {
+      actif: ['Actif', 'badge badge--ok'],
+      inactif: ['Inactif', 'badge']
+    },
     stock: {
       ok: ['Disponible', 'badge badge--ok'],
       faible: ['Stock faible', 'badge badge--warn'],
@@ -1775,7 +1779,7 @@ window.ERP = window.ERP || {};
      Volontairement limité aux actions à effet unique (créer/enregistrer/
      supprimer/convertir/mouvement de stock) — jamais les compteurs,
      pagination ou filtres, où cliquer plusieurs fois de suite est normal. */
-  const GUARDED_ACTIONS = '[data-save], [data-del], [data-del-project], [data-del-client], [data-in], [data-out], [data-return], [data-convert]';
+  const GUARDED_ACTIONS = '[data-save], [data-del], [data-del-project], [data-del-client], [data-in], [data-out], [data-return], [data-convert], [data-quick-point]';
   const GUARD_MS = 1500;
   document.addEventListener('click', (e) => {
     const el = e.target.closest(GUARDED_ACTIONS);
@@ -2871,6 +2875,29 @@ ERP.Components = ERP.Components || {};
     }).join('');
   }
 
+  /* Extrait de même pour « Équipe sur site » : réutilisé par le
+     rafraîchissement en direct déclenché par le pointage rapide. */
+  function renderTeam(p, workers) {
+    return `
+      <dl class="stat-band" style="grid-template-columns:repeat(3,1fr)">
+        <div><dt>Effectif</dt><dd class="money money--lg num" style="margin:0">${p.teamSize}</dd></div>
+        <div><dt>Présents</dt><dd class="money money--lg num" style="margin:0;color:var(--ok)">${p.presentToday}</dd></div>
+        <div><dt>Heures du jour</dt><dd class="money money--lg num" style="margin:0">${Math.round(p.hoursToday)} h</dd></div>
+      </dl>
+      ${workers.slice(0, 6).map(w => `
+        <div class="list-row" data-worker="${w.id}" role="button" tabindex="0">
+          <span class="avatar avatar--soft">${w.name.split(' ').map(s => s[0]).slice(0, 2).join('')}</span>
+          <span class="list-row__txt"><strong>${esc(w.name)}</strong><small>${esc(w.trade)}</small></span>
+          <span class="list-row__end">
+            ${badge('presence', w.todayStatus)}
+            ${w.todayStatus !== 'present' && p.status !== 'termine' ? `
+              <button class="icon-btn icon-btn--sm icon-btn--ghost write-guard" data-quick-point="${w.id}" type="button" title="Marquer présent aujourd'hui">${icon('check', 17)}</button>
+            ` : ''}
+          </span>
+        </div>`).join('')}
+      ${workers.length > 6 ? `<div class="card__foot t-center"><a class="btn btn--sm btn--ghost" href="#/pointage?projet=${p.id}">Voir les ${workers.length} ouvriers</a></div>` : ''}`;
+  }
+
   /* =======================================================
      FICHE PROJET
      ======================================================= */
@@ -2918,7 +2945,7 @@ ERP.Components = ERP.Components || {};
           <div class="kpi__value num">${p.burn}<span>%</span></div>
           <div class="kpi__foot">${fmt.money(p.remaining)} restants</div>
         </div>
-        <div class="kpi">
+        <div class="kpi" id="prjTeamKpi">
           <div class="kpi__top"><span class="kpi__ico kpi__ico--orange">${icon('hardhat', 19)}</span><span class="kpi__label">Ouvriers présents</span></div>
           <div class="kpi__value num">${p.presentToday}<span>/ ${p.teamSize}</span></div>
           <div class="kpi__foot">${fmt.hours(p.hoursToday)} pointées aujourd'hui</div>
@@ -2990,20 +3017,7 @@ ERP.Components = ERP.Components || {};
           <section class="card">
             <div class="card__head"><h3>Équipe sur site</h3><span class="spacer"></span>
               <a class="btn btn--sm btn--ghost" href="#/pointage?projet=${p.id}">Pointage</a></div>
-            <div class="card__body card__body--flush">
-              <dl class="stat-band" style="grid-template-columns:repeat(3,1fr)">
-                <div><dt>Effectif</dt><dd class="money money--lg num" style="margin:0">${p.teamSize}</dd></div>
-                <div><dt>Présents</dt><dd class="money money--lg num" style="margin:0;color:var(--ok)">${p.presentToday}</dd></div>
-                <div><dt>Heures du jour</dt><dd class="money money--lg num" style="margin:0">${Math.round(p.hoursToday)} h</dd></div>
-              </dl>
-              ${workers.slice(0, 6).map(w => `
-                <button class="list-row" data-worker="${w.id}">
-                  <span class="avatar avatar--soft">${w.name.split(' ').map(s => s[0]).slice(0, 2).join('')}</span>
-                  <span class="list-row__txt"><strong>${esc(w.name)}</strong><small>${esc(w.trade)}</small></span>
-                  <span class="list-row__end">${badge('presence', w.todayStatus)}</span>
-                </button>`).join('')}
-              ${workers.length > 6 ? `<div class="card__foot t-center"><a class="btn btn--sm btn--ghost" href="#/pointage?projet=${p.id}">Voir les ${workers.length} ouvriers</a></div>` : ''}
-            </div>
+            <div class="card__body card__body--flush" id="prjTeam">${renderTeam(p, workers)}</div>
           </section>
         </div>
       </div>`;
@@ -3109,7 +3123,46 @@ ERP.Components = ERP.Components || {};
     view.querySelector('[data-report]').onclick = () => {
       toast('Rapport de chantier généré (PDF simulé)', 'ok'); window.print();
     };
-    on(view, 'click', '[data-worker]', (e, t) => ERP.Router.go('/pointage/' + t.dataset.worker));
+    on(view, 'click', '[data-worker]', (e, t) => {
+      // Le bouton de pointage rapide est imbriqué dans la même ligne
+      // [data-worker] ; comme pour la feuille de pointage, les deux
+      // délégations étant posées sur le même élément view,
+      // e.stopPropagation() dans l'autre handler ne suffit pas à les
+      // isoler l'un de l'autre — d'où ce garde-fou explicite.
+      if (e.target.closest('[data-quick-point]')) return;
+      ERP.Router.go('/pointage/' + t.dataset.worker);
+    });
+
+    /* Pointage rapide depuis la fiche chantier : marquer un ouvrier présent
+       sans quitter la page — l'effectif, les présents du jour et les heures
+       du jour (tuile KPI + carte « Équipe sur site ») se rafraîchissent sur
+       place, comme la progression et le budget le font déjà pour les tâches
+       et les matériaux ci-dessus. */
+    on(view, 'click', '[data-quick-point]', async (e, t) => {
+      const workerId = t.dataset.quickPoint;
+      try {
+        await ERP.Api.timesheets.create({
+          workerId, projectId: p.id, date: ERP.DB.today,
+          in: 420, out: 960, breakMin: 60, status: 'present', note: ''
+        });
+        toast('Ouvrier pointé présent', 'ok');
+      } catch (err) {
+        toast('Erreur : ' + (err.message || err), 'danger');
+        return;
+      }
+      if (!view.isConnected) return; // l'utilisateur a déjà changé de page
+      const [freshP, freshWorkers] = await Promise.all([
+        ERP.Api.projects.get(p.id),
+        ERP.Api.workers.list({ projectId: p.id })
+      ]);
+      const kpi = view.querySelector('#prjTeamKpi');
+      if (kpi) {
+        kpi.querySelector('.kpi__value').innerHTML = `${freshP.presentToday}<span>/ ${freshP.teamSize}</span>`;
+        kpi.querySelector('.kpi__foot').textContent = `${fmt.hours(freshP.hoursToday)} pointées aujourd'hui`;
+      }
+      const teamHost = view.querySelector('#prjTeam');
+      if (teamHost) teamHost.innerHTML = renderTeam(freshP, freshWorkers);
+    });
   }
 
   /* ---------- Édition projet ---------- */
@@ -3387,7 +3440,7 @@ window.ERP = window.ERP || {};
   const toMin = (v) => { if (!v) return null; const [h, m] = v.split(':').map(Number); return h * 60 + m; };
   const toHHMM = (min) => min == null ? '' : `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
 
-  const state = { date: null, projectId: 'tous', trade: 'tous', status: 'tous', q: '' };
+  const state = { date: null, projectId: 'tous', trade: 'tous', status: 'tous', q: '', view: 'jour' };
 
   /* =======================================================
      PAGE POINTAGE DU JOUR
@@ -3400,20 +3453,33 @@ window.ERP = window.ERP || {};
     const projects = (await ERP.Api.projects.list()).filter(p => p.status !== 'termine');
     const trades = [...new Set(ERP.DB.workers.map(w => w.trade))].sort();
 
+    // Le bloc « jour » (navigation par date, statuts de présence, ajout
+    // d'un pointage) et le bloc « ouvriers » (fiche complète, sans notion
+    // de journée) partagent la même page mais pas la même forme de
+    // toolbar. Les deux jeux de contrôles sont toujours dans le DOM —
+    // seule leur visibilité change avec state.view — pour ne poser les
+    // délégations d'événements qu'une seule fois : reconstruire tout
+    // view.innerHTML à chaque bascule de vue empilerait un nouvel
+    // écouteur sur `view` à chaque clic (cf. le motif déjà en place pour
+    // Articles/Fournisseurs, qui ne touchent jamais qu'à refresh()).
     view.innerHTML = `
       <div class="toolbar">
-        <div class="day-nav">
+        <div class="day-nav" id="ptDayNav">
           <button class="icon-btn icon-btn--ghost" data-day="-1" aria-label="Jour précédent">${icon('chevronLeft', 20)}</button>
           <span class="day-nav__label" id="ptDate"></span>
           <button class="icon-btn icon-btn--ghost" data-day="1" aria-label="Jour suivant">${icon('chevronRight', 20)}</button>
         </div>
         <button class="btn btn--sm" id="ptToday">Aujourd'hui</button>
+        <div class="segmented" id="ptView">
+          <button data-v="jour">Feuille du jour</button>
+          <button data-v="tous">Tous les ouvriers</button>
+        </div>
         <span class="spacer"></span>
         <button class="btn" id="ptWorker">${icon('hardhat', 20)} Nouvel ouvrier</button>
         <button class="btn btn--accent write-guard" id="ptAdd">${icon('plus', 20)} Ajouter un pointage</button>
       </div>
 
-      <div class="kpis" style="grid-template-columns:repeat(5,minmax(0,1fr))" id="ptKpis"></div>
+      <div class="kpis" id="ptKpis"></div>
 
       <div class="toolbar">
         <div class="chips" id="ptStatus">
@@ -3440,23 +3506,76 @@ window.ERP = window.ERP || {};
       </div>
 
       <section class="card">
-        <div class="card__head"><h3>Feuille de pointage</h3><span class="spacer"></span>
+        <div class="card__head"><h3 id="ptTitle">Feuille de pointage</h3><span class="spacer"></span>
           <span class="tag" id="ptCount"></span>
           <button class="btn btn--sm" id="ptExport">${icon('download', 17)} Exporter</button>
         </div>
         <div class="card__body card__body--flush"><div class="table-wrap">
           <table class="tbl">
-            <thead><tr>
-              <th>Ouvrier</th><th>Métier</th><th>Chantier</th>
-              <th class="t-center">Arrivée</th><th class="t-center">Départ</th><th class="t-center">Pause</th>
-              <th class="t-right">Heures</th><th style="min-width:150px">Amplitude</th><th>Statut</th><th></th>
-            </tr></thead>
+            <thead id="ptHead"></thead>
             <tbody id="ptRows"></tbody>
           </table>
         </div></div>
       </section>`;
 
-    async function refresh() {
+    function applyViewChrome() {
+      const isRoster = state.view === 'tous';
+      // .day-nav/.chips/.btn posent chacune leur propre `display` dans la
+      // feuille de style de l'appli ; l'attribut `hidden` (UA stylesheet,
+      // origine la plus faible de la cascade) ne l'emporterait pas dessus,
+      // contrairement à #app/#authScreen plus haut qui sont explicitement
+      // forcés en !important. D'où le style inline, sans ambiguïté.
+      [['#ptDayNav', isRoster], ['#ptToday', isRoster], ['#ptStatus', isRoster], ['#ptAdd', isRoster]]
+        .forEach(([sel, hide]) => { view.querySelector(sel).style.display = hide ? 'none' : ''; });
+      view.querySelector('#ptTitle').textContent = isRoster ? 'Tous les ouvriers' : 'Feuille de pointage';
+      view.querySelector('#ptKpis').style.gridTemplateColumns = `repeat(${isRoster ? 4 : 5},minmax(0,1fr))`;
+      view.querySelectorAll('#ptView button').forEach(b => b.classList.toggle('is-active', b.dataset.v === state.view));
+      view.querySelector('#ptHead').innerHTML = isRoster
+        ? '<tr><th>Ouvrier</th><th>Métier</th><th>Chantier</th><th>Statut</th><th>Contrat</th><th class="t-right">Ancienneté</th><th></th></tr>'
+        : '<tr><th>Ouvrier</th><th>Métier</th><th>Chantier</th><th class="t-center">Arrivée</th><th class="t-center">Départ</th><th class="t-center">Pause</th><th class="t-right">Heures</th><th style="min-width:150px">Amplitude</th><th>Statut</th><th></th></tr>';
+      return isRoster;
+    }
+
+    async function refreshRoster() {
+      const workers = await ERP.Api.workers.list({ projectId: state.projectId, trade: state.trade, q: state.q });
+
+      view.querySelector('#ptKpis').innerHTML = [
+        { l: 'Total ouvriers', v: workers.length, i: 'users', t: '' },
+        { l: 'Actifs', v: workers.filter(w => w.status === 'actif').length, i: 'hardhat', t: 'kpi__ico--ok' },
+        { l: 'Affectés à un chantier', v: workers.filter(w => w.projectId).length, i: 'building', t: 'kpi__ico--orange' },
+        { l: 'Non affectés', v: workers.filter(w => !w.projectId).length, i: 'alert', t: 'kpi__ico--warn' }
+      ].map(k => `
+        <div class="kpi">
+          <div class="kpi__top"><span class="kpi__ico ${k.t}">${icon(k.i, 19)}</span><span class="kpi__label">${k.l}</span></div>
+          <div class="kpi__value num">${k.v}</div>
+        </div>`).join('');
+
+      view.querySelector('#ptCount').textContent = workers.length + ' ouvriers';
+      const tbody = view.querySelector('#ptRows');
+
+      if (!workers.length) {
+        tbody.innerHTML = `<tr><td colspan="7">${ERP.UI.empty('Aucun ouvrier',
+          'Aucun ouvrier ne correspond aux filtres choisis.')}</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = workers.map(w => `
+        <tr class="is-clickable" data-worker="${w.id}">
+          <td><div class="idcell">
+                <span class="avatar avatar--soft">${w.name.split(' ').map(s => s[0]).slice(0, 2).join('')}</span>
+                <span class="idcell__txt"><div class="cell-main">${esc(w.name)}</div>
+                <div class="cell-sub">Matricule ${esc(w.matricule || '—')}</div></span>
+              </div></td>
+          <td>${esc(w.trade)}</td>
+          <td class="small">${esc(w.projectName)}</td>
+          <td>${badge('worker', w.status)}</td>
+          <td class="small">${esc(w.contract || '—')}</td>
+          <td class="t-right num">${w.since ? (new Date().getFullYear() - +w.since.slice(0, 4)) + ' ans' : '—'}</td>
+          <td class="t-right"><button class="icon-btn icon-btn--ghost write-guard" data-edit-worker="${w.id}" aria-label="Modifier l'ouvrier">${icon('edit', 18)}</button></td>
+        </tr>`).join('');
+    }
+
+    async function refreshDay() {
       view.querySelector('#ptDate').textContent = fmt.dateFull(state.date);
       const [rows, sum] = await Promise.all([
         ERP.Api.timesheets.list(state),
@@ -3510,8 +3629,10 @@ window.ERP = window.ERP || {};
       }).join('');
     }
 
+    const refresh = () => applyViewChrome() ? refreshRoster() : refreshDay();
     await refresh();
 
+    on(view, 'click', '#ptView button', (e, t) => { state.view = t.dataset.v; refresh(); });
     on(view, 'click', '[data-day]', (e, t) => { state.date = dt.add(state.date, +t.dataset.day); refresh(); });
     view.querySelector('#ptToday').onclick = () => { state.date = ERP.DB.today; refresh(); };
     on(view, 'click', '#ptStatus .chip', (e, t) => {
@@ -3519,14 +3640,29 @@ window.ERP = window.ERP || {};
       view.querySelectorAll('#ptStatus .chip').forEach(c => c.classList.toggle('is-active', c === t));
       refresh();
     });
+    view.querySelector('#ptAdd').onclick = () => openForm(null, refresh);
     view.querySelector('#ptProject').onchange = (e) => { state.projectId = e.target.value; refresh(); };
     view.querySelector('#ptTrade').onchange = (e) => { state.trade = e.target.value; refresh(); };
     view.querySelector('#ptSearch').addEventListener('input', ERP.UI.debounce(e => { state.q = e.target.value; refresh(); }, 200));
-    view.querySelector('#ptAdd').onclick = () => openForm(null, refresh);
     view.querySelector('#ptWorker').onclick = () => openWorkerForm(null, refresh);
-    view.querySelector('#ptExport').onclick = () => toast('Feuille de pointage exportée (CSV simulé)', 'ok');
-    on(view, 'click', '[data-edit]', (e, t) => { e.stopPropagation(); openForm(t.dataset.edit, refresh); });
-    on(view, 'click', '[data-worker]', (e, t) => ERP.Router.go('/pointage/' + t.dataset.worker));
+    view.querySelector('#ptExport').onclick = () => toast(
+      (state.view === 'tous' ? 'Liste des ouvriers exportée' : 'Feuille de pointage exportée') + ' (CSV simulé)', 'ok');
+    on(view, 'click', '[data-edit]', (e, t) => openForm(t.dataset.edit, refresh));
+    on(view, 'click', '[data-edit-worker]', (e, t) => {
+      const w = ERP.DB.workers.find(x => x.id === t.dataset.editWorker);
+      if (w) openWorkerForm(w, refresh);
+    });
+    on(view, 'click', '[data-worker]', (e, t) => {
+      // Le bouton d'action (pointage ou fiche ouvrier) est imbriqué dans la
+      // même ligne [data-worker] ; les deux délégations étant posées sur le
+      // même élément view, e.stopPropagation() dans l'autre handler ne les
+      // empêche pas de se déclencher toutes les deux (elle n'agit que sur
+      // la remontée vers des ancêtres, pas entre écouteurs d'un même nœud)
+      // — d'où ce garde-fou explicite, déjà utilisé pour la fiche fournisseur
+      // (cf. [data-call] / [data-id] plus haut dans le fichier).
+      if (e.target.closest('[data-edit], [data-edit-worker]')) return;
+      ERP.Router.go('/pointage/' + t.dataset.worker);
+    });
   }
 
   /* =======================================================
@@ -3608,9 +3744,14 @@ window.ERP = window.ERP || {};
   async function openForm(workerId, done) {
     const workers = ERP.DB.workers;
     const projects = ERP.DB.projects.filter(p => p.status !== 'termine');
-    const existing = workerId
+    const found = workerId
       ? (await ERP.Api.timesheets.list({ date: state.date })).find(r => r.workerId === workerId)
       : null;
+    // Une ligne "en attente" (ouvrier affecté à un chantier mais pas encore
+    // pointé ce jour-là, voir scheduledTimesheetRows côté API) n'est pas un
+    // pointage réel : on ouvre le formulaire comme pour une création, avec
+    // Présent proposé par défaut plutôt que le statut Absent provisoire.
+    const existing = found && !found.pending ? found : null;
     const w = workerId ? workers.find(x => x.id === workerId) : null;
 
     const m = ERP.UI.modal({
@@ -3626,7 +3767,7 @@ window.ERP = window.ERP || {};
           <div class="field">
             <label for="f-project">Chantier</label>
             <select id="f-project">${projects.map(p =>
-              `<option value="${p.id}" ${(existing ? existing.projectId : w && w.projectId) === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+              `<option value="${p.id}" ${(found ? found.projectId : w && w.projectId) === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
           </div>
           <div class="field"><label for="f-date">Date</label><input id="f-date" type="date" value="${state.date}"></div>
           <div class="field"><label for="f-in">Heure d'arrivée</label><input id="f-in" type="time" value="${existing && existing.in != null ? toHHMM(existing.in) : '07:00'}"></div>
@@ -3634,7 +3775,7 @@ window.ERP = window.ERP || {};
           <div class="field"><label for="f-break">Pause (minutes)</label><input id="f-break" type="number" min="0" step="5" value="${existing ? existing.breakMin : 60}"></div>
           <div class="field"><label for="f-status">Statut</label>
             <select id="f-status">
-              <option value="present" ${existing && existing.status === 'present' ? 'selected' : ''}>Présent</option>
+              <option value="present" ${!existing || existing.status === 'present' ? 'selected' : ''}>Présent</option>
               <option value="retard" ${existing && existing.status === 'retard' ? 'selected' : ''}>Arrivée tardive</option>
               <option value="absent" ${existing && existing.status === 'absent' ? 'selected' : ''}>Absent</option>
             </select></div>
